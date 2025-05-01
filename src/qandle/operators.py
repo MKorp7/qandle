@@ -614,10 +614,13 @@ class BuiltReset(BuiltOperator):
         if unbatched:
             state = state.unsqueeze(0)
         state = self.to_matrix_transform(state)
-        scale = torch.linalg.norm(state, dim=1) / (torch.linalg.norm(state[..., :1], dim=1) + 1e-7)
+        old_norm = torch.linalg.norm(state, dim=-1)
+        old_norm_0 = (state[:, 0].abs()) + 1e-5
+        scale = old_norm / old_norm_0
         new_state = torch.zeros_like(state, dtype=torch.cfloat)
         new_state[:, 0] = state[:, 0] * scale
         state = self.to_state_transform(new_state)
+        state = state / torch.linalg.norm(state, dim=-1, keepdim=True)
         if unbatched:
             state = state.squeeze(0)
         return state
