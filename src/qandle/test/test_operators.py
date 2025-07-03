@@ -123,6 +123,30 @@ def test_unbatched():
                     assert torch.allclose(gt, own)
                     assert isinstance(own_cz.__str__(), str)
                     assert isinstance(own_cz_u.__str__(), str)
+        for ctrl1 in range(num_w):
+            for ctrl2 in range(num_w):
+                for tgt in range(num_w):
+                    if len({ctrl1, ctrl2, tgt}) != 3:
+                        continue
+                    gt = forward_ground_truth(
+                        num_w, lambda: qml.Toffoli(wires=[ctrl1, ctrl2, tgt]), inp
+                    )
+                    own_ccnot_u = qandle.operators.CCNOT(
+                        control1=ctrl1, control2=ctrl2, target=tgt
+                    )
+                    own_ccnot = own_ccnot_u.build(num_qubits=num_w)
+                    own = own_ccnot(inp)
+                    assert torch.allclose(
+                        gt, own
+                    ), (
+                        f"num_w: {num_w}, ctrl1: {ctrl1}, "
+                        f"ctrl2: {ctrl2}, tgt: {tgt}, diff: {(gt - own).abs().max()}"
+                    )
+                    errors.append((gt - own).abs().sum())
+                    assert isinstance(own_ccnot.__str__(), str)
+                    assert isinstance(own_ccnot_u.__str__(), str)
+                    own_ccnot.to_qasm()
+                    own_ccnot_u.to_qasm()
 
     info = f"errors max: {max(errors)}, avg: {sum(errors)/len(errors)}"
     assert max(errors) < 1e-5, f"Errors too high, {info}"
@@ -199,5 +223,26 @@ def test_batched():
                     own = own_cz(inp)
                     assert torch.allclose(gt, own)
                     errors.append((gt - own).abs().sum())
+            for ctrl2 in range(num_w):
+                for tgt in range(num_w):
+                    if len({w, ctrl2, tgt}) != 3:
+                        continue
+                    gt = forward_ground_truth(
+                        num_w, lambda: qml.Toffoli(wires=[w, ctrl2, tgt]), inp
+                    )
+                    own_ccnot = (
+                        qandle.operators.CCNOT(control1=w, control2=ctrl2, target=tgt)
+                        .build(num_qubits=num_w)
+                    )
+                    own = own_ccnot(inp)
+                    assert torch.allclose(
+                        gt, own
+                    ), (
+                        f"num_w: {num_w}, ctrl1: {w}, ctrl2: {ctrl2}, "
+                        f"tgt: {tgt}, diff: {(gt - own).abs().max()}"
+                    )
+                    errors.append((gt - own).abs().sum())
+                    assert isinstance(own_ccnot.__str__(), str)
+                    own_ccnot.to_qasm()
     info = f"errors max: {max(errors)}, avg: {sum(errors)/len(errors)}"
     assert max(errors) < 1e-5, f"Errors too high, {info}"
