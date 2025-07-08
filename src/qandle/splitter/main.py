@@ -1,13 +1,13 @@
 import typing
 import networkx as nx
-
+import numpy as np
 import dataclasses
 
 import qandle.splitter.grouping as grouping
 import qandle.operators as op
 
 cnot_types = typing.Union[op.CNOT, op.BuiltCNOT]
-
+ccnot_types = typing.Union[op.CCNOT, op.BuiltCCNOT]
 
 def split(
     circuit,
@@ -17,12 +17,50 @@ def split(
     assert all(
         isinstance(layer, op.Operator) for layer in circuit.layers
     ), f"Unknown layer type in circuit: {[type(layer) for layer in circuit.layers if not isinstance(layer, op.Operator)]}"
-
+    #CCNOT decomposintion
+    layers = []
+    for layer in circuit.layers:
+        new_layer= []
+        for gate in layer:
+            if isinstance(gate, ccnot_types):
+                gates_ccnot = _decompose_ccnot(gate.control1, gate.control2, gate.target)
+                for gate_ccnot in gates_ccnot:
+                    layers.append([gate_ccnot])
+            else:
+                new_layer.append(gate)
+        if new_layer:
+            layers.append(new_layer)
+    circuit.layers = layers
     G = _construct_graph(circuit)
     G = grouping.groupnodes(G, max_qubits)
     assigned = _assign_to_subcircuits(G.nodes(), circuit.layers)
     normalized = _normalize_subcircuits(assigned)
     return normalized
+
+def _decompose_ccnot(control1, control2, target):
+    """
+    decomposition idea from: Shende, V.V., & Markov, I.L. (2008). On the CNOT-cost of TOFFOLI gates. Quantum Inf. Comput., 9, 461-486.
+    """
+    gates = []
+    gates.append(op.RY(target, -0.5 * np.pi)) #Hadamard
+    gates.append(op.RZ(target, np.pi))
+    gates.append(op.CNOT(control2, target))
+    gates.append(op.RZ(target, -0.25 * np.pi)) # T†
+    gates.append(op.CNOT(control1, target))
+    gates.append(op.RZ(target, 0.25 * np.pi)) #T
+    gates.append(op.CNOT(control2, target))
+    gates.append(op.RZ(target, -0.25 * np.pi))
+    gates.append(op.CNOT(control1, target))
+    gates.append(op.RZ(target, 0.25 * np.pi))
+    gates.append(op.RZ(control2, 0.25 * np.pi))
+    gates.append(op.RY(target, -0.5 * np.pi))  # Hadamard
+    gates.append(op.RZ(target, np.pi))
+    gates.append(op.CNOT(control1, control2))
+    gates.append(op.RZ(control2, -0.25 * np.pi))  # T†
+    gates.append(op.RZ(control1, 0.25 * np.pi))
+    gates.append(op.CNOT(control1, control2))
+    return gates
+
 
 
 def _construct_graph(circuit) -> nx.DiGraph:
@@ -31,7 +69,6 @@ def _construct_graph(circuit) -> nx.DiGraph:
     for i, layer in enumerate(circuit.layers):
         if isinstance(layer, cnot_types):
             nodes.append(grouping.Node(layer.c, layer.t, i))
-
     _txt = (
         "No CNOTs in the circuit, instead of splitting, just use separate circuits for each qubit"
     )
@@ -155,3 +192,4 @@ def _normalize_subcircuits(assigned: dict):
 
     normalized = {i: normalize_subcircuit(assigned[i]) for i in assigned.keys()}
     return normalized
+
