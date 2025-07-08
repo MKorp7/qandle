@@ -17,7 +17,7 @@ def split(
     assert all(
         isinstance(layer, op.Operator) for layer in circuit.layers
     ), f"Unknown layer type in circuit: {[type(layer) for layer in circuit.layers if not isinstance(layer, op.Operator)]}"
-    #CCNOT decomposintion
+    #CCNOT decomposintion, under development (:
     layers = []
     for layer in circuit.layers:
         new_layer= []
