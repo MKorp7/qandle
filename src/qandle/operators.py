@@ -602,16 +602,23 @@ class BuiltCCNOT(BuiltOperator):
 
     @staticmethod
     def _calculate_matrix(c1: int, c2: int, t: int, num_qubits: int):
-        M = torch.zeros(2**num_qubits, 2**num_qubits) * 0j
-        m_c1 = 1 << c1
-        m_c2 = 1 << c2
-        m_t = 1 << t
-        
-        for i in range(2**num_qubits):
-            if (i & m_c1) and (i & m_c2):
-                M[i, i ^ m_t] = 1
-            else:
-                M[i, i] = 1
+        dim = 2 ** num_qubits
+        indices = torch.arange(dim)
+        M = torch.zeros((dim, dim)) * 0j
+        #convention to big-endian
+        c1 = num_qubits - c1 - 1
+        c2 = num_qubits - c2 - 1
+        t = num_qubits - t - 1
+
+        control1_mask = 1 << c1
+        control2_mask = 1 << c2
+        target_mask = 1 << t
+
+        are_controls_on = ((indices & control1_mask) != 0) & ((indices & control2_mask) != 0)
+        source_indices = indices
+        target_indices = torch.where(are_controls_on, indices ^ target_mask, indices)
+
+        M[source_indices, target_indices] = 1
         return M
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
