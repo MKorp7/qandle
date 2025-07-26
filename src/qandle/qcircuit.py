@@ -56,7 +56,10 @@ class Circuit(torch.nn.Module):
             else:
                 self.circuit = UnsplittedCircuit(self.num_qubits, layers)
 
-    def forward(self, state=None, **kwargs):
+    def forward(self,  state=None, diff_method: str | None = None, **kwargs):
+        if diff_method == "parameter_shift":
+            from qandle.gradients import parameter_shift_forward
+            return parameter_shift_forward(self.circuit, state, **kwargs)
         return self.circuit.forward(state, **kwargs)
 
     def to_matrix(self, **kwargs):
