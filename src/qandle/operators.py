@@ -29,6 +29,87 @@ __all__ = [
 matrixbuilder = typing.Tuple[torch.Tensor, torch.Tensor, typing.Callable, typing.Callable]
 
 
+class PairwiseRotation(torch.autograd.Function):
+    """Apply a single-qubit rotation to all amplitude pairs of a state.
+    In scripts/benchmark_pairwise_rotation.py this method is tested and proved to be faster than previous approach.
+    """
+
+    @staticmethod
+    def forward(ctx, state: torch.Tensor, rot: torch.Tensor, qubit: int, num_qubits: int):
+        # state: (..., 2**n)
+        # rot: (2,2) or (batch,2,2)
+        dim = state.shape[-1]
+        state_flat = state.reshape(-1, dim)
+        orig_state_batch = state_flat.shape[0]
+        if rot.dim() == 2:
+            rot_batch = rot.unsqueeze(0)
+        else:
+            rot_batch = rot
+        orig_rot_batch = rot_batch.shape[0]
+        batch = max(orig_state_batch, orig_rot_batch)
+        if orig_state_batch != batch:
+            state_flat = state_flat.expand(batch, -1)
+        if orig_rot_batch != batch:
+            rot_batch = rot_batch.expand(batch, -1, -1)
+        out = state_flat.clone()
+        step = 1 << (num_qubits - qubit - 1)
+        for start in range(0, dim, 2 * step):
+            s0 = slice(start, start + step)
+            s1 = slice(start + step, start + 2 * step)
+            in0 = state_flat[:, s0]
+            in1 = state_flat[:, s1]
+            r00 = rot_batch[:, 0, 0].unsqueeze(-1)
+            r10 = rot_batch[:, 1, 0].unsqueeze(-1)
+            r01 = rot_batch[:, 0, 1].unsqueeze(-1)
+            r11 = rot_batch[:, 1, 1].unsqueeze(-1)
+            out[:, s0] = in0 * r00 + in1 * r10
+            out[:, s1] = in0 * r01 + in1 * r11
+        ctx.save_for_backward(state_flat, rot_batch)
+        ctx.qubit = qubit
+        ctx.num_qubits = num_qubits
+        ctx.state_shape = state.shape
+        ctx.rot_shape = rot.shape
+        ctx.orig_state_batch = orig_state_batch
+        ctx.orig_rot_batch = orig_rot_batch
+        return out.reshape_as(state).contiguous()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        state_flat, rot_batch = ctx.saved_tensors
+        dim = state_flat.shape[-1]
+        gflat = grad_output.reshape(-1, dim)
+        step = 1 << (ctx.num_qubits - ctx.qubit - 1)
+        grad_state = torch.zeros_like(gflat)
+        grad_rot = torch.zeros_like(rot_batch)
+        rot_adj = rot_batch.conj()
+        for start in range(0, dim, 2 * step):
+            s0 = slice(start, start + step)
+            s1 = slice(start + step, start + 2 * step)
+            go0 = gflat[:, s0]
+            go1 = gflat[:, s1]
+            in0 = state_flat[:, s0]
+            in1 = state_flat[:, s1]
+            r00 = rot_adj[:, 0, 0].unsqueeze(-1)
+            r10 = rot_adj[:, 1, 0].unsqueeze(-1)
+            r01 = rot_adj[:, 0, 1].unsqueeze(-1)
+            r11 = rot_adj[:, 1, 1].unsqueeze(-1)
+            grad_state[:, s0] = go0 * r00 + go1 * r01
+            grad_state[:, s1] = go0 * r10 + go1 * r11
+            grad_rot[:, 0, 0] += torch.sum(in0.conj() * go0, dim=-1)
+            grad_rot[:, 1, 0] += torch.sum(in1.conj() * go0, dim=-1)
+            grad_rot[:, 0, 1] += torch.sum(in0.conj() * go1, dim=-1)
+            grad_rot[:, 1, 1] += torch.sum(in1.conj() * go1, dim=-1)
+        # Reduce gradients if inputs were expanded
+        if ctx.orig_rot_batch == 1 and grad_rot.shape[0] > 1:
+            grad_rot = grad_rot.sum(dim=0, keepdim=True)
+        elif ctx.rot_shape == torch.Size([2, 2]):
+            grad_rot = grad_rot.sum(dim=0)
+        if ctx.orig_state_batch == 1 and grad_state.shape[0] > 1:
+            grad_state = grad_state.sum(dim=0, keepdim=True)
+        grad_state = grad_state.reshape(ctx.state_shape)
+        return grad_state, grad_rot, None, None
+
+
 class AbstractNoForward(abc.ABCMeta, utils.do_not_implement("forward", "backward")):
     pass
 
@@ -87,11 +168,11 @@ class U(UnbuiltOperator):
 
 class BuiltU(BuiltOperator):
     def __init__(
-        self,
-        qubit: int,
-        matrix: torch.Tensor,
-        num_qubits: int,
-        self_description: str = "U",
+            self,
+            qubit: int,
+            matrix: torch.Tensor,
+            num_qubits: int,
+            self_description: str = "U",
     ):
         super().__init__()
         self.qubit = qubit
@@ -110,16 +191,16 @@ class BuiltU(BuiltOperator):
     def to_qasm(self) -> qasm.QasmRepresentation:
         u = f"{self.original_matrix[0, 0]:.2f}, {self.original_matrix[0, 1]:.2f}, {self.original_matrix[1, 0]:.2f}, {self.original_matrix[1, 1]:.2f}"
         definition = (
-            "gate "
-            + self.description
-            + "_"
-            + str(self.qubit)
-            + " q["
-            + str(self.qubit)
-            + "] {{ "
-            + "U("
-            + u
-            + ") }}"
+                "gate "
+                + self.description
+                + "_"
+                + str(self.qubit)
+                + " q["
+                + str(self.qubit)
+                + "] {{ "
+                + "U("
+                + u
+                + ") }}"
         )
         return qasm.QasmRepresentation(gate_str=definition, qubit=self.qubit)
 
@@ -152,11 +233,11 @@ class UnbuiltParametrizedOperator(UnbuiltOperator, metaclass=AbstractNoForward):
     """Container class for parametrized operators that have not been built yet."""
 
     def __init__(
-        self,
-        qubit: int,
-        theta: typing.Union[float, torch.Tensor, None] = None,
-        name: typing.Union[str, None] = None,
-        **kwargs,
+            self,
+            qubit: int,
+            theta: typing.Union[float, torch.Tensor, None] = None,
+            name: typing.Union[str, None] = None,
+            **kwargs,
     ):
         """
         Creates a parametrized operator.
@@ -215,12 +296,12 @@ class UnbuiltParametrizedOperator(UnbuiltOperator, metaclass=AbstractNoForward):
 
 class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
     def __init__(
-        self,
-        qubit: int,
-        remapping: typing.Callable,
-        num_qubits: int,
-        initialtheta: typing.Union[torch.Tensor, None] = None,
-        name: typing.Union[str, None] = None,
+            self,
+            qubit: int,
+            remapping: typing.Callable,
+            num_qubits: int,
+            initialtheta: typing.Union[torch.Tensor, None] = None,
+            name: typing.Union[str, None] = None,
     ):
         super().__init__()
         self.qubit = qubit
@@ -234,9 +315,6 @@ class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
         self.unbuilt_class = BUILT_CLASS_RELATION.T[self.__class__]
 
         self.register_buffer("_i", torch.tensor(1j, dtype=torch.cfloat), persistent=False)
-        a, b, self.a_op, self.b_op = self.matrix_builder()
-        self.register_buffer("_a", a.T.contiguous(), persistent=False)
-        self.register_buffer("_b", b.T.contiguous(), persistent=False)
 
     def __str__(self) -> str:
         base = f"{self.unbuilt_class.__name__}_{self.qubit}"
@@ -264,19 +342,20 @@ class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
             )
 
     def get_matrix(self, **kwargs) -> torch.Tensor:
+        a, b, a_op, b_op = self.matrix_builder()
         if self.named:
             t = kwargs[self.name] / 2  # type: ignore # if name is None, named would be False
             if t.dim() == 1:
                 t = t.unsqueeze(-1).unsqueeze(-1)
         else:
             t = self.remapping(self.theta) / 2
-        a_matrix = self._a * self.a_op(t)
-        b_matrix = self._b * self.b_op(t)
+        a_matrix = self.hydrated(a) * a_op(t)
+        b_matrix = self.hydrated(b) * b_op(t)
         matrix = a_matrix + b_matrix
         return matrix
 
     def hydrated(
-        self, special: typing.Union[torch.Tensor, None, typing.Tuple] = None
+            self, special: typing.Union[torch.Tensor, None, typing.Tuple] = None
     ) -> torch.Tensor:
         if special is None:
             special = torch.eye(2)
@@ -288,15 +367,20 @@ class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
         return matrix.to(torch.cfloat)
 
     def forward(self, state: torch.Tensor, **kwargs) -> torch.Tensor:
-        mat = self.get_matrix(**kwargs)
-        if mat.dim() == 2:
-            res = state @ mat
+        a, b, a_op, b_op = self.matrix_builder()
+        if self.named:
+            t = kwargs[self.name]
         else:
-            if state.dim() == 1:
-                state = state.unsqueeze(0)
-                # raise ValueError("One of the named matrices received batched input, but the state is not batched. Please batch the state and the named parameters or neither.")
-            res = (state.unsqueeze(1) @ mat).squeeze(1)
-        return res
+            t = self.remapping(self.theta)
+        if t.dim() == 0:
+            t = t.unsqueeze(0)
+        theta = (t / 2).view(-1, 1, 1)
+        a = a.to(state.device)
+        b = b.to(state.device)
+        rot = a_op(theta) * a + b_op(theta) * b
+        if rot.shape[0] == 1:
+            rot = rot[0]
+        return PairwiseRotation.apply(state, rot, self.qubit, self.num_qubits)
 
     @abc.abstractmethod
     def matrix_builder(self) -> matrixbuilder:
@@ -369,8 +453,8 @@ class RZ(UnbuiltParametrizedOperator):
 class BuiltRX(BuiltParametrizedOperator):
     def matrix_builder(self) -> matrixbuilder:
         return (
-            -self.hydrated(((0, 1), (1, 0))) * self._i,
-            self.hydrated(),
+            torch.tensor([[0, -1j], [-1j, 0]], dtype=torch.cfloat),
+            torch.eye(2, dtype=torch.cfloat),
             torch.sin,
             torch.cos,
         )
@@ -379,8 +463,8 @@ class BuiltRX(BuiltParametrizedOperator):
 class BuiltRY(BuiltParametrizedOperator):
     def matrix_builder(self) -> matrixbuilder:
         return (
-            self.hydrated(((0, -1), (1, 0))),
-            self.hydrated(),
+            torch.tensor([[0, -1], [1, 0]], dtype=torch.cfloat),
+            torch.eye(2, dtype=torch.cfloat),
             torch.sin,
             torch.cos,
         )
@@ -389,8 +473,8 @@ class BuiltRY(BuiltParametrizedOperator):
 class BuiltRZ(BuiltParametrizedOperator):
     def matrix_builder(self) -> matrixbuilder:
         return (
-            self.hydrated(((1, 0), (0, 0))),
-            self.hydrated(((0, 0), (0, 1))),
+            torch.tensor([[1, 0], [0, 0]], dtype=torch.cfloat),
+            torch.tensor([[0, 0], [0, 1]], dtype=torch.cfloat),
             lambda theta: torch.exp(-self._i * theta),
             lambda theta: torch.exp(self._i * theta),
         )
@@ -412,7 +496,7 @@ class CNOT(UnbuiltOperator):
 
     def build(self, num_qubits, **kwargs) -> "BuiltCNOT":
         return BuiltCNOT(control=self.c, target=self.t, num_qubits=num_qubits)
-    
+
 
 class CCNOT(UnbuiltOperator):
     """CCNOT gate."""
@@ -511,7 +595,7 @@ class BuiltControlled(BuiltOperator):
         target_matrix = self.t.to_matrix(**kwargs)
         c2 = self.num_qubits - self.c - 1
         mask = 1 << c2
-        dim = 2**self.num_qubits
+        dim = 2 ** self.num_qubits
         device = state.device
         indices = torch.arange(dim, device=device)
         c1_mask = (indices & mask) != 0
@@ -567,9 +651,9 @@ class BuiltCNOT(BuiltOperator):
 
     @staticmethod
     def _calculate_matrix(c: int, t: int, num_qubits: int):
-        M = torch.zeros(2**num_qubits, 2**num_qubits) * 0j
+        M = torch.zeros(2 ** num_qubits, 2 ** num_qubits) * 0j
         c2, t2 = num_qubits - c - 1, num_qubits - t - 1
-        for i in range(2**num_qubits):
+        for i in range(2 ** num_qubits):
             if i & (1 << c2):
                 M[i, i ^ (1 << t2)] = 1
             else:
@@ -598,14 +682,14 @@ class BuiltCCNOT(BuiltOperator):
         self.num_qubits = num_qubits
         self.register_buffer(
             "_M", self._calculate_matrix(control1, control2, target, num_qubits), persistent=False
-        ) 
+        )
 
     @staticmethod
     def _calculate_matrix(c1: int, c2: int, t: int, num_qubits: int):
         dim = 2 ** num_qubits
         indices = torch.arange(dim)
         M = torch.zeros((dim, dim)) * 0j
-        #convention to big-endian
+        # convention to big-endian
         c1 = num_qubits - c1 - 1
         c2 = num_qubits - c2 - 1
         t = num_qubits - t - 1
@@ -633,6 +717,7 @@ class BuiltCCNOT(BuiltOperator):
     def to_matrix(self, **kwargs) -> torch.Tensor:
         return self._M
 
+
 class BuiltCZ(BuiltOperator):
     def __init__(self, control: int, target: int, num_qubits: int):
         super().__init__()
@@ -646,8 +731,8 @@ class BuiltCZ(BuiltOperator):
     @staticmethod
     def _calculate_matrix(c: int, t: int, num_qubits: int):
         c2, t2 = num_qubits - c - 1, num_qubits - t - 1
-        indices = torch.arange(2**num_qubits)
-        diag = torch.ones(2**num_qubits, dtype=torch.cfloat)
+        indices = torch.arange(2 ** num_qubits)
+        diag = torch.ones(2 ** num_qubits, dtype=torch.cfloat)
         mask = ((indices & (1 << c2)) != 0) & ((indices & (1 << t2)) != 0)
         diag[mask] = -1
         M = torch.diag(diag)
@@ -729,9 +814,9 @@ class BuiltSWAP(BuiltOperator):
 
     @staticmethod
     def _calculate_matrix(a: int, b: int, num_qubits: int):
-        swap_matrix = torch.eye(2**num_qubits)
+        swap_matrix = torch.eye(2 ** num_qubits)
         a, b = num_qubits - a - 1, num_qubits - b - 1
-        for i in range(2**num_qubits):
+        for i in range(2 ** num_qubits):
             swapped_i = i
             if ((i >> a) & 1) != ((i >> b) & 1):
                 swapped_i = i ^ ((1 << a) | (1 << b))

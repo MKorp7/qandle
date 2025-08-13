@@ -1,5 +1,6 @@
 import pennylane as qml
 import torch
+import pytest
 import qandle
 
 
@@ -67,6 +68,35 @@ def forward_ground_truth(num_w: int, pl_op, inp):
     qnode = qml.QNode(pl_circuit, dev, interface="torch")
     return qnode().to(torch.cfloat)
 
+
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("gate_cls", [qandle.RX, qandle.RY, qandle.RZ])
+def test_pairwise_rotation_matches_matrix(batched, gate_cls):
+    torch.manual_seed(0)
+    num_q = 3
+    theta_val = torch.tensor(0.321)
+    gate = gate_cls(qubit=1, theta=theta_val, remapping=None).build(num_qubits=num_q)
+    if batched:
+        state = torch.rand(5, 2**num_q, dtype=torch.cfloat, requires_grad=True)
+        state_ref = state.clone().detach().requires_grad_(True)
+    else:
+        state = torch.rand(2**num_q, dtype=torch.cfloat, requires_grad=True)
+        state_ref = state.clone().detach().requires_grad_(True)
+    out_forward = gate(state)
+    mat = gate.to_matrix()
+    if mat.dim() == 2:
+        out_matrix = state_ref @ mat
+    else:
+        out_matrix = (state_ref.unsqueeze(1) @ mat).squeeze(1)
+    assert torch.allclose(out_forward, out_matrix)
+    grad_state_f, grad_theta_f = torch.autograd.grad(
+        out_forward.real.sum(), (state, gate.theta), retain_graph=True
+    )
+    grad_state_m, grad_theta_m = torch.autograd.grad(
+        out_matrix.real.sum(), (state_ref, gate.theta)
+    )
+    assert torch.allclose(grad_state_f, grad_state_m)
+    assert torch.allclose(grad_theta_f, grad_theta_m)
 
 def test_custom():
     torch.manual_seed(42)

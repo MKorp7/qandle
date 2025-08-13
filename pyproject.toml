@@ -1,6 +1,6 @@
 [project]
 name = "qandle"
-version = "0.1.12"
+version = "0.1.13"
 description = "QANDLE is a fast and simple quantum state-vector simulator for hybrid machine learning using the PyTorch library."
 authors = [
     { name = "Gerhard Stenzel", email = "gerhard.stenzel@ifi.lmu.de" }
@@ -39,11 +39,12 @@ dev = [
     "sphinx >=7.4.7",
     "myst-nb >=1.1.1",
     "sphinx-rtd-theme >=2.0.0",
-    "ruff >=0.5.5"
+    "ruff >=0.5.5",
+    "qiskit >=0.46"
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["src/qandle/",]
+testpaths = ["src/qandle/", "tests"]
 
 [tool.poe.tasks]
 test = "pytest --cov=qandle --cov-report=html -W error -W ignore::PendingDeprecationWarning:semantic_version.base -W ignore::DeprecationWarning -W ignore::pytest_cov.plugin.CovDisabledWarning"
