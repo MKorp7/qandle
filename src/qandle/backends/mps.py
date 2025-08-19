@@ -91,21 +91,61 @@ class MPSBackend(QuantumBackend):
         self.tensors[q2].data = Vh
 
     def measure(self, qubits=None):
-        # naive full contraction for small n; OK for testing. More if TODO
-        full = self._to_statevector()  # returns (2**n,) complex
-        probs = full.abs() ** 2
+        """Return measurement probabilities for given qubits.
+        Parameters
+        ----------
+        qubits:
+            Sequence of qubits to measure. If ``None`` all qubits are
+            measured and a full probability distribution is returned.
+        """
+
+        n = len(self.tensors)
+
         if qubits is None:
-            return probs
-        if isinstance(qubits, int):
+            qubits = list(range(n))
+        elif isinstance(qubits, int):
             qubits = [qubits]
-        n = int(math.log2(full.numel()))
-        mask = [(i in qubits) for i in range(n)]
-        out = torch.zeros(2 ** len(qubits), dtype=probs.dtype, device=probs.device)
-        for idx, p in enumerate(probs):
-            bits = [(idx >> k) & 1 for k in range(n)]
-            key = sum(b << i for i, b in enumerate([bits[k] for k in range(n) if mask[k]]))
-            out[key] += p
-        return out
+
+        qubits = list(qubits)
+        qubits.sort()
+        qset = set(qubits)
+
+        envs: dict[int, torch.Tensor] = {
+            0: torch.eye(1, dtype=self.tensors[0].data.dtype, device=self.device)
+        }
+
+        meas_count = 0
+        for i, tensor in enumerate(self.tensors):
+            if i in qset:  # branching on this qubit
+                new_envs: dict[int, torch.Tensor] = {}
+                for outcome, env in envs.items():
+                    for bit in (0, 1):
+                        A = tensor.data[:, bit, :]
+                        new_env = A.conj().T @ env @ A
+                        key = outcome | (bit << meas_count)
+                        new_envs[key] = new_env
+                envs = new_envs
+                meas_count += 1
+            else:  # trace over physical index
+                for outcome, env in list(envs.items()):
+                    A0 = tensor.data[:, 0, :]
+                    A1 = tensor.data[:, 1, :]
+                    envs[outcome] = (
+                        A0.conj().T @ env @ A0 + A1.conj().T @ env @ A1
+                    )
+
+        probs = torch.zeros(
+            2 ** len(qubits),
+            dtype=self.tensors[0].data.real.dtype,
+            device=self.device,
+        )
+        for outcome, env in envs.items():
+            probs[outcome] = torch.trace(env).real
+
+        total = probs.sum()
+        if total != 0:
+            probs = probs / total  # normalise
+        return probs
 
     def _to_statevector(self) -> torch.Tensor:
         """Exact contraction → state vector (small n for testing)."""
