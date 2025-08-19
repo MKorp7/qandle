@@ -29,10 +29,15 @@ __all__ = [
 matrixbuilder = typing.Tuple[torch.Tensor, torch.Tensor, typing.Callable, typing.Callable]
 
 
+def _to_like(x: typing.Union[torch.Tensor, typing.Any], ref: torch.Tensor) -> torch.Tensor:
+    """Return ``x`` as a tensor on the same device and with the same dtype as ``ref``."""
+    if isinstance(x, torch.Tensor):
+        return x.to(device=ref.device, dtype=ref.dtype)
+    return torch.as_tensor(x, device=ref.device, dtype=ref.dtype)
+
+
 class PairwiseRotation(torch.autograd.Function):
-    """Apply a single-qubit rotation to all amplitude pairs of a state.
-    In scripts/benchmark_pairwise_rotation.py this method is tested and proved to be faster than previous approach.
-    """
+    """Apply a single-qubit rotation to all amplitude pairs of a state."""
 
     @staticmethod
     def forward(ctx, state: torch.Tensor, rot: torch.Tensor, qubit: int, num_qubits: int):
@@ -375,9 +380,10 @@ class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
         if t.dim() == 0:
             t = t.unsqueeze(0)
         theta = (t / 2).view(-1, 1, 1)
-        a = a.to(state.device)
-        b = b.to(state.device)
-        rot = a_op(theta) * a + b_op(theta) * b
+        theta_t = torch.as_tensor(theta, device=state.device, dtype=state.dtype)
+        a = a.to(device=state.device, dtype=state.dtype)
+        b = b.to(device=state.device, dtype=state.dtype)
+        rot = _to_like(a_op(theta_t), state) * a + _to_like(b_op(theta_t), state) * b
         if rot.shape[0] == 1:
             rot = rot[0]
         return PairwiseRotation.apply(state, rot, self.qubit, self.num_qubits)
