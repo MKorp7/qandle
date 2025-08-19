@@ -350,26 +350,39 @@ class BuiltParametrizedOperator(BuiltOperator, abc.ABC):
         a, b, a_op, b_op = self.matrix_builder()
         if self.named:
             t = kwargs[self.name] / 2  # type: ignore # if name is None, named would be False
-            if t.dim() == 1:
-                t = t.unsqueeze(-1).unsqueeze(-1)
         else:
             t = self.remapping(self.theta) / 2
-        a_matrix = self.hydrated(a) * a_op(t)
-        b_matrix = self.hydrated(b) * b_op(t)
+        t = torch.as_tensor(t, device=self.theta.device)  # ensure tensor & device
+        if t.dim() == 1:
+            t = t.unsqueeze(-1).unsqueeze(-1)
+        a = a.to(t.device)
+        b = b.to(t.device)
+        a_matrix = self.hydrated(a, device=t.device) * a_op(t)
+        b_matrix = self.hydrated(b, device=t.device) * b_op(t)
         matrix = a_matrix + b_matrix
         return matrix
 
     def hydrated(
-            self, special: typing.Union[torch.Tensor, None, typing.Tuple] = None
+            self,
+            special: typing.Union[torch.Tensor, None, typing.Tuple] = None,
+            device: typing.Optional[torch.device] = None,
     ) -> torch.Tensor:
-        if special is None:
-            special = torch.eye(2)
-        if not isinstance(special, torch.Tensor):
-            special = torch.tensor(special)
-        matrix = torch.eye(1)
+        if isinstance(special, torch.Tensor):
+            device = special.device
+            special = special.to(device=device, dtype=torch.cfloat)
+        else:
+            device = device or torch.device("cpu")
+            if special is None:
+                special = torch.eye(2, dtype=torch.cfloat, device=device)
+            else:
+                special = torch.tensor(special, dtype=torch.cfloat, device=device)
+        matrix = torch.eye(1, dtype=torch.cfloat, device=device)
         for i in range(self.num_qubits):
-            matrix = torch.kron(matrix, special if i == self.qubit else torch.eye(2))
-        return matrix.to(torch.cfloat)
+            matrix = torch.kron(
+                matrix,
+                special if i == self.qubit else torch.eye(2, dtype=torch.cfloat, device=device),
+            )
+        return matrix
 
     def forward(self, state: torch.Tensor, **kwargs) -> torch.Tensor:
         a, b, a_op, b_op = self.matrix_builder()
