@@ -156,12 +156,19 @@ class AngleEmbeddingBuilt(InputOperatorBuilt):
     def prod(self, inp):
         """
         Return the matrix product along the third-to-last dimension.
-        TODO: Optimize this.
+        Uses a vectorized approach to multiply all matrices in a single call
+        to ``torch.linalg.multi_dot`` while supporting arbitrary batch
+        dimensions. The previous implementation iterated with a Python loop,
+        which was slow and could impede optimization.
         """
-        res = inp[..., 0, :, :]
-        for i in range(1, inp.shape[-3]):
-            res = res @ inp[..., i, :, :]
-        return res
+        *batch, k, n, m = inp.shape
+        flat_inp = inp.reshape(-1, k, n, m)
+
+        def _chain(mat_seq: torch.Tensor) -> torch.Tensor:
+            return torch.linalg.multi_dot(mat_seq.unbind(0))
+
+        res = torch.vmap(_chain)(flat_inp)
+        return res.reshape(*batch, n, m)
 
     def to_qasm(self) -> qasm.QasmRepresentation:
         reps = []
