@@ -13,7 +13,7 @@ def test_amplitude_embedding_unpadded():
     assert torch.allclose(out.real, inp / inp.norm())
     assert torch.allclose(out.imag, torch.zeros_like(inp))
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AmplitudeEmbedding(inp, wires=range(w), normalize=True)
         return qml.state()
@@ -33,7 +33,7 @@ def test_amplitude_embedding_unpadded_batched():
     assert torch.allclose(out.real, inp)
     assert torch.allclose(out.imag, torch.zeros_like(inp))
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AmplitudeEmbedding(inp, wires=range(w), normalize=True)
         return qml.state()
@@ -57,7 +57,7 @@ def test_angle_embedding_x3():
     w = 3
     inp = torch.arange(w).to(torch.float) + 0.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="X")
         return qml.state()
@@ -74,7 +74,7 @@ def test_angle_embedding_x3_batched():
     w = 3
     inp = torch.rand(10, w).to(torch.float) + 0.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="X")
         return qml.state()
@@ -91,7 +91,7 @@ def test_angle_embedding_y4():
     w = 4
     inp = torch.arange(w).to(torch.float) + 2.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="Y")
         return qml.state()
@@ -106,7 +106,7 @@ def test_angle_embedding_y4_batched():
     w = 4
     inp = torch.rand(10, w).to(torch.float) + 2.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="Y")
         return qml.state()
@@ -123,7 +123,7 @@ def test_angle_embedding_z5():
     w = 5
     inp = torch.arange(w).to(torch.float) + 2.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="Z")
         return qml.state()
@@ -140,7 +140,7 @@ def test_angle_embedding_z5_batched():
     w = 5
     inp = torch.rand(10, w).to(torch.float) + 2.5
 
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=w), interface="torch")
+    @qml.qnode(device=qml.device("default.qubit", wires=w), interface="torch")
     def pl_circuit():
         qml.AngleEmbedding(inp, wires=range(w), rotation="Z")
         return qml.state()
@@ -151,3 +151,30 @@ def test_angle_embedding_z5_batched():
     )
     out = emb(amp=inp)
     assert torch.allclose(out, pl_out)
+
+
+def test_angle_embedding_prod_vectorized():
+    w = 3
+    dim = 2 ** w
+    emb = embeddings.AngleEmbeddingBuilt.__new__(embeddings.AngleEmbeddingBuilt)
+
+    inp = torch.randn(5, w, dim, dim, dtype=torch.cfloat, requires_grad=True)
+
+    # Ensure the vectorized implementation runs without tracking gradients
+    emb.prod(inp.detach())
+
+    out = emb.prod(inp)
+    loss = out.abs().sum()
+    loss.backward()
+    assert inp.grad is not None
+
+    inp_ref = inp.detach().clone().requires_grad_(True)
+    res = inp_ref[..., 0, :, :]
+    for i in range(1, inp_ref.shape[-3]):
+        res = res @ inp_ref[..., i, :, :]
+    out_ref = res
+    loss_ref = out_ref.abs().sum()
+    loss_ref.backward()
+
+    assert torch.allclose(out, out_ref)
+    assert torch.allclose(inp.grad, inp_ref.grad)
