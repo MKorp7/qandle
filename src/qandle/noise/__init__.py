@@ -1,10 +1,13 @@
 from .channels import (
     BitFlip,
     BitFlipChannel,
+    NoiseChannel,
+    BuiltNoiseChannel,
     PhaseFlip,
     Depolarizing,
-    AmplitudeDamping,
+    Dephasing,
     PhaseDamping,
+    AmplitudeDamping,
     CorrelatedDepolarizing,
 )
 from .model import NoiseModel
@@ -12,10 +15,13 @@ from .model import NoiseModel
 __all__ = [
     "BitFlip",
     "BitFlipChannel",
+    "NoiseChannel",
+    "BuiltNoiseChannel",
     "PhaseFlip",
     "Depolarizing",
-    "AmplitudeDamping",
+    "Dephasing",
     "PhaseDamping",
+    "AmplitudeDamping",
     "CorrelatedDepolarizing",
     "NoiseModel",
 ]

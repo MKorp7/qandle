@@ -37,7 +37,7 @@ class StronglyEntanglingLayerBudget(BuiltAnsatz):
         self.num_qubits = num_qubits_total
         self.rots = [utils.parse_rot(r) for r in rotations]
         if remapping is None:
-            remapping = qw_map.none
+            remapping = qw_map.identity
         self.remapping = remapping
         self.param_budget = param_budget
         self.control_gate = control_gate
