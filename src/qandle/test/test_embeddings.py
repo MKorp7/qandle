@@ -27,7 +27,7 @@ def test_amplitude_embedding_unpadded_batched():
     inp = torch.rand(10, 2**w).to(torch.float)
     inp = inp / inp.norm(dim=1, keepdim=True)
     emb = embeddings.AmplitudeEmbedding(
-        qubits=range(w), normalize=False, pad_with=None, name="amp"
+        qubits=list(range(w)), normalize=False, pad_with=None, name="amp"
     ).build(num_qubits=w)
     out = emb(amp=inp)
     assert torch.allclose(out.real, inp)
@@ -46,7 +46,7 @@ def test_amplitude_embedding_padded():
     inp = torch.rand(11).to(torch.float)
     n_inp = inp / inp.norm()
     emb = embeddings.AmplitudeEmbedding(
-        qubits=range(4), normalize=True, pad_with=0, name="amp"
+        qubits=list(range(4)), normalize=True, pad_with=0, name="amp"
     ).build(num_qubits=4)
     out = emb(amp=inp)
     assert torch.allclose(out.real[:11], n_inp)
