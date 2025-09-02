@@ -139,11 +139,19 @@ class AngleEmbeddingBuilt(InputOperatorBuilt):
     @staticmethod
     def _get_rot_matrices(rot, num_qubits, qubits):
         gates = [rot(qubit=w, remapping=None).build(num_qubits) for w in qubits]
-        a = [g._a.T for g in gates]
-        b = [g._b.T for g in gates]
-        a = torch.stack(a, dim=0)
-        b = torch.stack(b, dim=0)
-        return a, b, gates[0].a_op, gates[0].b_op
+
+        a_list = []
+        b_list = []
+        a_op = b_op = None
+
+        for g in gates:
+            a, b, a_op, b_op = g.matrix_builder()
+            a_list.append(g.hydrated(a))
+            b_list.append(g.hydrated(b))
+
+        a = torch.stack(a_list, dim=0)
+        b = torch.stack(b_list, dim=0)
+        return a, b, a_op, b_op
 
     def forward(self, state=None, **kwargs):
         inp = kwargs[self.name]
