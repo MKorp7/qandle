@@ -1,6 +1,4 @@
 from .channels import (
-    BitFlip,
-    BitFlipChannel,
     NoiseChannel,
     BuiltNoiseChannel,
     PhaseFlip,
@@ -13,8 +11,6 @@ from .channels import (
 from .model import NoiseModel
 
 __all__ = [
-    "BitFlip",
-    "BitFlipChannel",
     "NoiseChannel",
     "BuiltNoiseChannel",
     "PhaseFlip",
