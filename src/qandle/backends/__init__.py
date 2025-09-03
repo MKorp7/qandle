@@ -1,45 +1,25 @@
-# ruff: noqa: F403 F401
-
-from .qcircuit import *
-from .measurements import *
-from .embeddings import *
-from .ansaetze import *
-from .drawer import *
-from .splitter import *
-from . import config
-from .convolution import *
-from .errors import *
-from .operators import *
-from .noise import *
-from .simulators import *
-try:
-    from .mitigation import *
-except ModuleNotFoundError:  # pragma: no cover - mitigation module optional
-    pass
-from .utils import *
-from .qasm import *
-
-from .utils_gates import H, X, Y, Z, S, T
+import torch
+from typing import Protocol, runtime_checkable, Sequence
 
 
-def __reimport():  # pragma: no cover
-    print("reimporting qandle")
-    import importlib
-    import sys
+@runtime_checkable
+class QuantumBackend(Protocol):
+    '''Backend interface.'''
 
-    modules = {k: v for k, v in sys.modules.items()}
-    for module in modules:
-        if module.startswith("qandle"):
-            importlib.reload(sys.modules[module])
+    def allocate(self, n_qubits: int): ...
 
-    try:
-        # Patch snakeviz to not show in notebook (always open in new tab)
-        import snakeviz
+    def apply_1q(self, gate: torch.Tensor, q: int): ...
 
-        snakeviz.ipymagic._check_ipynb = lambda: False
-    except ImportError:
-        pass
+    def apply_2q(self, gate: torch.Tensor, q1: int, q2: int): ...
+
+    def measure(self, qubits: Sequence[int] | None = None) -> torch.Tensor: ...
 
 
-def __count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+__all__ = [
+    "QuantumBackend",
+    "StateVectorBackend",
+    "MPSBackend",
+]
+
+from .statevector import StateVectorBackend
+from .mps import MPSBackend
