@@ -69,6 +69,10 @@ __all__ = [
 # Maximum number of qubits allowed for explicit global matrix embedding.
 MAX_GLOBAL_KRAUS_QUBITS = 10
 
+# Parameters smaller than this threshold are treated as zero.  This avoids
+# unnecessary work when channels are effectively the identity.
+NEAR_ZERO = 1e-12
+
 # Axis permutations used when applying Kraus operators to density matrices.
 # PERM2_NB groups bra/ket indices as (target, rest, target, rest) and the
 # inverse undoes this grouping.
@@ -493,7 +497,7 @@ class PhaseFlip(NoiseChannel):
 
     @property
     def is_identity(self) -> bool:
-        return self.p == 0
+        return self.p < NEAR_ZERO
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"PhaseFlip(p={self.p}){_format_targets(self.targets)}"
@@ -517,7 +521,7 @@ class Depolarizing(NoiseChannel):
 
     @property
     def is_identity(self) -> bool:
-        return self.p == 0
+        return self.p < NEAR_ZERO
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"Depolarizing(p={self.p}){_format_targets(self.targets)}"
@@ -553,7 +557,7 @@ class Dephasing(NoiseChannel):
 
     @property
     def is_identity(self) -> bool:
-        return self.gamma == 0
+        return self.gamma < NEAR_ZERO
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"Dephasing(gamma={self.gamma}){_format_targets(self.targets)}"
@@ -578,7 +582,7 @@ class AmplitudeDamping(NoiseChannel):
 
     @property
     def is_identity(self) -> bool:
-        return self.gamma == 0
+        return self.gamma < NEAR_ZERO
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"AmplitudeDamping(gamma={self.gamma}){_format_targets(self.targets)}"
@@ -604,7 +608,7 @@ class CorrelatedDepolarizing(NoiseChannel):
 
     @property
     def is_identity(self) -> bool:
-        return self.p == 0
+        return self.p < NEAR_ZERO
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"CorrelatedDepolarizing(p={self.p}){_format_targets(self.targets)}"
