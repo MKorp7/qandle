@@ -2,8 +2,13 @@ import qw_map
 
 DEFAULT_MAPPING = qw_map.tanh
 r"""
-Default weight remapping function for quantum gates. This function limits the weights of the variational quantum circuit's gates. 
-:code:`qw_map.tanh` is the default value, yielding better results in practice. For higher performance or naive usage, set :code:`DEFAULT_MAPPING = lambda x: x` or :code:`DEFAULT_MAPPING = qw_map.none`. For more information, see the `arxiv paper 1 <https://arxiv.org/abs/2212.14807>`_ and `arxiv paper 2 <https://arxiv.org/abs/2306.05776>`_.
+Default weight remapping function for quantum gates. This function limits the
+weights of the variational quantum circuit's gates. :code:`qw_map.tanh` is the
+default value, yielding better results in practice. For higher performance or
+naive usage, set :code:`DEFAULT_MAPPING = lambda x: x` or
+:code:`DEFAULT_MAPPING = qw_map.identity`. For more information, see the
+`arxiv paper 1 <https://arxiv.org/abs/2212.14807>`_ and `arxiv paper 2
+<https://arxiv.org/abs/2306.05776>`_.
 """
 
 DRAW_SPLITTED_PAD = 7
@@ -21,7 +26,7 @@ Character used for drawing qubits, can be changed to the normal dash '-', depend
     q1─RZ─RY─RZ─X─■───┼─RZ─RY─RZ─┼─■─┼─X─
     q2─RZ─RY─RZ───X─■─┼─RZ─RY─RZ─X─┼─■─┼─
     q3─RZ─RY─RZ─────X─■─RZ─RY─RZ───X───■─
-    
+
     >>> qandle.config.DRAW_DASH = "-"
     >>> print(circuit.draw())
     q0-RZ-RY-RZ-■-----X-RZ-RY-RZ-■---X---
@@ -29,7 +34,7 @@ Character used for drawing qubits, can be changed to the normal dash '-', depend
     q2-RZ-RY-RZ---X-■-┼-RZ-RY-RZ-X-┼-■-┼-
     q3-RZ-RY-RZ-----X-■-RZ-RY-RZ---X---■-
 
-    
+
 """
 
 DRAW_SHOW_VALUES = True

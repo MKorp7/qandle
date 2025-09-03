@@ -38,7 +38,7 @@ class StronglyEntanglingLayer(UnbuiltAnsatz):
             q_params = torch.rand(depth, len(qubits), len(rotations))
         self.q_params = q_params
         if remapping is None:
-            remapping = qw_map.none
+            remapping = qw_map.identity
         self.remapping = remapping
 
     def build(self, *args, **kwargs) -> BuiltAnsatz:

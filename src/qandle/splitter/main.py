@@ -97,7 +97,7 @@ def _decompose_ccnot(control1, control2, target):
     """
     decomposition idea from: Shende, V.V., & Markov, I.L. (2008). On the CNOT-cost of TOFFOLI gates. Quantum Inf. Comput., 9, 461-486.
     """
-    no_mapping = qw_map.none
+    no_mapping = qw_map.identity
     hmat = (1 / np.sqrt(2)) * np.array([[1, 1], [1, -1]], dtype=np.complex64)
     tmat = np.array([[1, 0], [0, np.exp(1j * np.pi / 4)]], dtype=np.complex64)
     tdgmat = np.array([[1, 0], [0, np.exp(-1j * np.pi / 4)]], dtype=np.complex64)

@@ -168,7 +168,7 @@ class UnbuiltParametrizedOperator(UnbuiltOperator, metaclass=AbstractNoForward):
             theta = torch.tensor(theta, requires_grad=True, dtype=torch.float)
         remapping = kwargs.get("remapping", config.DEFAULT_MAPPING)
         if remapping is None:
-            remapping = qw_map.none
+            remapping = qw_map.identity
         self.qubit = qubit
         self.name = name
         self.named = name is not None
@@ -322,7 +322,7 @@ class RX(UnbuiltParametrizedOperator):
         name : str, optional
             The name of the operator, by default None. If None, the operator is not named and does not accept named inputs.
         remapping : Callable, optional
-            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.none` or :code:`lambda x: x`.
+            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.identity` or :code:`lambda x: x`.
     """
 
 
@@ -342,7 +342,7 @@ class RY(UnbuiltParametrizedOperator):
         name : str, optional
             The name of the operator, by default None. If None, the operator is not named and does not accept named inputs.
         remapping : Callable, optional
-            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.none` or :code:`lambda x: x`.
+            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.identity` or :code:`lambda x: x`.
     """
 
 
@@ -362,7 +362,7 @@ class RZ(UnbuiltParametrizedOperator):
         name : str, optional
             The name of the operator, by default None. If None, the operator is not named and does not accept named inputs.
         remapping : Callable, optional
-            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.none` or :code:`lambda x: x`.
+            A function that remaps the parameter theta, by default config.DEFAULT_MAPPING. To disable remapping, pass :code:`qw_map.identity` or :code:`lambda x: x`.
     """
 
 
