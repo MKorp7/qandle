@@ -254,7 +254,7 @@ class UnbuiltParametrizedOperator(UnbuiltOperator, metaclass=AbstractNoForward):
             theta = torch.tensor(theta, requires_grad=True, dtype=torch.float)
         remapping = kwargs.get("remapping", config.DEFAULT_MAPPING)
         if remapping is None:
-            remapping = qw_map.identity
+            remapping = qw_map.none
         self.qubit = qubit
         self.name = name
         self.named = name is not None
