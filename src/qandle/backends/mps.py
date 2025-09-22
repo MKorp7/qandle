@@ -125,20 +125,16 @@ class MPSBackend(QuantumBackend):
         if not self.auto_swap:
             raise AssertionError("non-adjacent 2-qubit gate not supported (insert SWAPs)")
         swap_gate = self._get_swap_gate(dtype=self.dtype, device=self.device)
+        left, right = (q1, q2) if q1 < q2 else (q2, q1)
+        swap_positions = list(range(right - 1, left, -1))
+        for pos in swap_positions:
+            self._apply_adjacent_2q(swap_gate, pos, pos + 1)
         if q1 < q2:
-            swap_positions = list(range(q2 - 1, q1, -1))
-            for pos in swap_positions:
-                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
             self._apply_adjacent_2q(gate, q1, q1 + 1)
-            for pos in reversed(swap_positions):
-                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
         else:
-            swap_positions = list(range(q2, q1 - 1))
-            for pos in swap_positions:
-                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
-            self._apply_adjacent_2q(gate, q1, q1 - 1)
-            for pos in reversed(swap_positions):
-                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
+            self._apply_adjacent_2q(gate, left + 1, left)
+        for pos in reversed(swap_positions):
+            self._apply_adjacent_2q(swap_gate, pos, pos + 1)
 
     def measure(self, qubits=None):
         """Return measurement probabilities for given qubits.
@@ -152,30 +148,38 @@ class MPSBackend(QuantumBackend):
         n = len(self.tensors)
 
         if qubits is None:
-            qubits = list(range(n))
+            requested = list(range(n))
         elif isinstance(qubits, int):
-            qubits = [qubits]
+            requested = [qubits]
+        else:
+            requested = list(qubits)
 
-        qubits = list(qubits)
-        qubits.sort()
-        qset = set(qubits)
+        if len(requested) != len(set(requested)):
+            raise ValueError("Measurement qubits must be unique")
+
+        prob_dtype = torch.empty((), dtype=self.dtype).real.dtype
+
+        if not requested:
+            return torch.ones(1, dtype=prob_dtype, device=self.device)
+
+        ordered = sorted(requested)
+        meas_index = {q: idx for idx, q in enumerate(ordered)}
 
         envs: dict[int, torch.Tensor] = {
-            0: torch.eye(1, dtype=self.tensors[0].data.dtype, device=self.device)
+            0: torch.eye(1, dtype=self.dtype, device=self.device)
         }
 
-        meas_count = 0
-        for i, tensor in enumerate(self.tensors):
-            if i in qset:  # branching on this qubit
+        for site, tensor in enumerate(self.tensors):
+            bit_pos = meas_index.get(site)
+            if bit_pos is not None:  # branching on this qubit
                 new_envs: dict[int, torch.Tensor] = {}
                 for outcome, env in envs.items():
                     for bit in (0, 1):
                         A = tensor.data[:, bit, :]
                         new_env = A.conj().T @ env @ A
-                        key = outcome | (bit << meas_count)
+                        key = outcome | (bit << bit_pos)
                         new_envs[key] = new_env
                 envs = new_envs
-                meas_count += 1
             else:  # trace over physical index
                 for outcome, env in list(envs.items()):
                     A0 = tensor.data[:, 0, :]
@@ -184,17 +188,25 @@ class MPSBackend(QuantumBackend):
                         A0.conj().T @ env @ A0 + A1.conj().T @ env @ A1
                     )
 
-        probs = torch.zeros(
-            2 ** len(qubits),
-            dtype=self.tensors[0].data.real.dtype,
-            device=self.device,
-        )
+        probs_sorted = torch.zeros(2 ** len(ordered), dtype=prob_dtype, device=self.device)
         for outcome, env in envs.items():
-            probs[outcome] = torch.trace(env).real
+            probs_sorted[outcome] = torch.trace(env).real
 
-        total = probs.sum()
+        total = probs_sorted.sum()
         if total != 0:
-            probs = probs / total  # normalise
+            probs_sorted = probs_sorted / total  # normalise
+
+        if requested == ordered:
+            return probs_sorted
+
+        perm = [requested.index(q) for q in ordered]
+        probs = torch.zeros_like(probs_sorted)
+        for src_index, value in enumerate(probs_sorted):
+            dst_index = 0
+            for bit_pos, out_pos in enumerate(perm):
+                bit = (src_index >> bit_pos) & 1
+                dst_index |= bit << out_pos
+            probs[dst_index] = value
         return probs
 
     def _to_statevector(self) -> torch.Tensor:
