@@ -3,6 +3,17 @@ from dataclasses import dataclass
 from . import QuantumBackend
 
 
+_SWAP_BASE = torch.tensor(
+    [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ],
+    dtype=torch.float32,
+)
+
+
 def svd_truncate(theta: torch.Tensor,
                  max_D: int,
                  eps: float = 1e-10) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
@@ -37,12 +48,15 @@ class MPSBackend(QuantumBackend):
                  n_qubits: int,
                  dtype=torch.complex64,
                  device="cpu",
-                 max_bond_dim: int = 64):
+                 max_bond_dim: int = 64,
+                 auto_swap: bool = True):
         self.dtype = dtype
         self.device = device
         self.max_D = max_bond_dim
+        self.auto_swap = auto_swap
         self.trunc_error = 0.0
         self.max_D_used = 1
+        self._swap_cache: dict[tuple[torch.device, torch.dtype], torch.Tensor] = {}
         self.tensors: list[MPSTensor] = [
             MPSTensor(torch.zeros(1, 2, 1, dtype=dtype, device=device))
             for _ in range(n_qubits)
@@ -63,20 +77,27 @@ class MPSBackend(QuantumBackend):
         T = self.tensors[q].data  # (Dl,2,Dr)
         self.tensors[q].data = torch.einsum("ab, lbr -> lar", gate.to(T), T)
 
-    def apply_2q(self, gate: torch.Tensor, q1: int, q2: int):
-        assert abs(q2 - q1) == 1, "non-adjacent 2-qubit gate not supported (insert SWAPs)"
-        if gate.shape[0] != 4:
-            n = int(math.log2(gate.shape[0]))
-            idx = lambda b1, b2: ((b1 << (n - q1 - 1)) | (b2 << (n - q2 - 1)))
-            sel = [idx(0, 0), idx(0, 1), idx(1, 0), idx(1, 1)]
-            gate = gate[sel][:, sel]
-        if q2 < q1:
-            q1, q2 = q2, q1
-        A, B = self.tensors[q1].data, self.tensors[q2].data
+    def _get_swap_gate(self, *, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> torch.Tensor:
+        key = (torch.device(device or self.device), dtype or self.dtype)
+        if key not in self._swap_cache:
+            self._swap_cache[key] = _SWAP_BASE.to(device=key[0], dtype=key[1])
+        return self._swap_cache[key]
+
+    def _apply_adjacent_2q(self, gate: torch.Tensor, q1: int, q2: int) -> None:
+        if abs(q2 - q1) != 1:
+            raise ValueError("_apply_adjacent_2q expects neighbouring qubits")
+        left, right = (q1, q2) if q1 < q2 else (q2, q1)
+        swap_required = q1 > q2
+        A, B = self.tensors[left].data, self.tensors[right].data
         Dl, Dr = A.shape[0], B.shape[2]
         theta = torch.einsum("lab, bcr -> lacr", A, B)  # Dl,2,2,Dr
+        if swap_required:
+            theta = theta.permute(0, 2, 1, 3)
         theta = theta.reshape(Dl, 4, Dr)  # merge physical legs
         theta = torch.einsum("pq, lqr -> lpr", gate.to(theta), theta)
+        theta = theta.reshape(Dl, 2, 2, Dr)
+        if swap_required:
+            theta = theta.permute(0, 2, 1, 3)
         theta = theta.reshape(Dl * 2, 2 * Dr)  # prepare SVD
         U, S, Vh, disc = svd_truncate(theta, self.max_D)
         D_new = S.numel()
@@ -87,8 +108,37 @@ class MPSBackend(QuantumBackend):
             S = S / norm
         U = U.reshape(Dl, 2, D_new)
         Vh = (torch.diag(S).to(Vh) @ Vh).reshape(D_new, 2, Dr)
-        self.tensors[q1].data = U
-        self.tensors[q2].data = Vh
+        self.tensors[left].data = U
+        self.tensors[right].data = Vh
+
+    def apply_2q(self, gate: torch.Tensor, q1: int, q2: int):
+        if q1 == q2:
+            raise ValueError("Cannot apply a 2-qubit gate on the same qubit twice")
+        if gate.shape[0] != 4:
+            n = int(math.log2(gate.shape[0]))
+            idx = lambda b1, b2: ((b1 << (n - q1 - 1)) | (b2 << (n - q2 - 1)))
+            sel = [idx(0, 0), idx(0, 1), idx(1, 0), idx(1, 1)]
+            gate = gate[sel][:, sel]
+        if abs(q2 - q1) == 1:
+            self._apply_adjacent_2q(gate, q1, q2)
+            return
+        if not self.auto_swap:
+            raise AssertionError("non-adjacent 2-qubit gate not supported (insert SWAPs)")
+        swap_gate = self._get_swap_gate(dtype=self.dtype, device=self.device)
+        if q1 < q2:
+            swap_positions = list(range(q2 - 1, q1, -1))
+            for pos in swap_positions:
+                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
+            self._apply_adjacent_2q(gate, q1, q1 + 1)
+            for pos in reversed(swap_positions):
+                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
+        else:
+            swap_positions = list(range(q2, q1 - 1))
+            for pos in swap_positions:
+                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
+            self._apply_adjacent_2q(gate, q1, q1 - 1)
+            for pos in reversed(swap_positions):
+                self._apply_adjacent_2q(swap_gate, pos, pos + 1)
 
     def measure(self, qubits=None):
         """Return measurement probabilities for given qubits.

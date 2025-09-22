@@ -2,7 +2,24 @@ import pytest
 import torch
 import qandle
 from qandle import Circuit
+from qandle import MeasureJointProbability
 import random
+
+
+def _assert_backends_agree(gates, num_qubits, backend_kwargs=None):
+    c = Circuit(gates, num_qubits=num_qubits)
+    vec = c(backend="statevector")
+    mps = c(backend="mps", backend_kwargs=backend_kwargs or {})
+    torch.testing.assert_close(vec.state, mps._to_statevector())
+
+
+def _assert_probabilities_agree(gates, num_qubits):
+    c = Circuit(gates, num_qubits=num_qubits)
+    vec = c(backend="statevector")
+    mps = c(backend="mps")
+    vec_probs = MeasureJointProbability()(vec.state)
+    mps_probs = mps.measure()
+    torch.testing.assert_close(vec_probs, mps_probs, atol=1e-6, rtol=1e-6)
 
 def test_ghz_state_and_measure():
 
@@ -72,3 +89,30 @@ def test_random_circuits_measurements_agree():
             subset = rng.choice([None, [0], [1]])
             vec_subset = [1, 0] if subset is None else [1 - q for q in subset]
             torch.testing.assert_close(vec.measure(vec_subset), mps.measure(subset))
+
+
+def test_long_range_cnot_matches_statevector():
+    gates = [
+        qandle.H(0, num_qubits=5),
+        qandle.CNOT(0, 4),
+        qandle.CNOT(4, 1),
+    ]
+    _assert_probabilities_agree(gates, num_qubits=5)
+
+
+def test_long_range_cz_matches_statevector():
+    gates = [
+        qandle.H(0, num_qubits=4),
+        qandle.CNOT(0, 3),
+        qandle.CZ(3, 1),
+    ]
+    _assert_probabilities_agree(gates, num_qubits=4)
+
+
+def test_auto_swap_opt_out_requires_manual_swaps():
+    gates = [
+        qandle.H(0, num_qubits=4),
+        qandle.CNOT(0, 3),
+    ]
+    with pytest.raises(AssertionError):
+        _assert_backends_agree(gates, num_qubits=4, backend_kwargs={"auto_swap": False})
