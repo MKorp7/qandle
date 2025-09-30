@@ -14,6 +14,21 @@ from qandle.ansaetze.ansatz import UnbuiltAnsatz, BuiltAnsatz
 __all__ = ["StronglyEntanglingLayer"]
 
 
+def _ops_to_qasm(
+    ops: typing.Iterable[op.Operator],
+) -> typing.List[qasm.QasmRepresentation]:
+    """Convert a sequence of operators to their QASM representations."""
+
+    qasm_ops: typing.List[qasm.QasmRepresentation] = []
+    for gate in ops:
+        rep = gate.to_qasm()
+        if isinstance(rep, qasm.QasmRepresentation):
+            qasm_ops.append(rep)
+        else:
+            qasm_ops.extend(rep)
+    return qasm_ops
+
+
 class StronglyEntanglingLayer(UnbuiltAnsatz):
     """
     A strongly entangling layer, inspired by `this paper <https://arxiv.org/abs/1804.00633>`_.
@@ -55,13 +70,27 @@ class StronglyEntanglingLayer(UnbuiltAnsatz):
         return "SEL"
 
     def to_qasm(self) -> qasm.QasmRepresentation:
-        raise NotImplementedError("TODO")
+        return _ops_to_qasm(self.decompose())
 
     def decompose(self) -> typing.List[op.UnbuiltOperator]:
-        layers = []
+        layers: typing.List[op.UnbuiltOperator] = []
+        if not self.qubits:
+            return layers
+
+        num_qubits_total = self.num_qubits
+        if num_qubits_total is None:
+            try:
+                num_qubits_total = max(self.qubits) + 1
+            except ValueError as exc:  # pragma: no cover - defensive
+                raise ValueError(
+                    "StronglyEntanglingLayer.decompose requires at least one qubit to infer "
+                    "the number of qubits."
+                ) from exc
+
+        rot_count = len(self.rots)
         for d in range(self.depth):
             for wi, w in enumerate(self.qubits):
-                for r in range(len(self.rots)):
+                for r in range(rot_count):
                     layers.append(
                         self.rots[r](
                             qubit=w,
@@ -69,11 +98,15 @@ class StronglyEntanglingLayer(UnbuiltAnsatz):
                             remapping=self.remapping,
                         )
                     )
-            layers.extend(
-                StronglyEntanglingLayerBuilt._get_cnots(
-                    self.qubits, self.num_qubits, d % (self.num_qubits - 1)
+            if len(self.qubits) > 1:
+                layers.extend(
+                    StronglyEntanglingLayerBuilt._get_cnots(
+                        self.qubits,
+                        num_qubits_total,
+                        d % (len(self.qubits) - 1),
+                        build=False,
+                    )
                 )
-            )
         return layers
 
 
@@ -103,7 +136,14 @@ class StronglyEntanglingLayerBuilt(BuiltAnsatz):
                             remapping=remapping,  # type: ignore
                         ).build(num_qubits)
                     )
-            layers.extend(self._get_cnots(self.qubits, self.num_qubits, d % (len(self.qubits) - 1)))
+            if len(self.qubits) > 1:
+                layers.extend(
+                    self._get_cnots(
+                        self.qubits,
+                        self.num_qubits,
+                        d % (len(self.qubits) - 1),
+                    )
+                )
         self.mods = torch.nn.Sequential(*layers)
 
     def forward(self, state: torch.Tensor):
@@ -111,20 +151,35 @@ class StronglyEntanglingLayerBuilt(BuiltAnsatz):
 
     @staticmethod
     def _get_cnots(
-        qubits: typing.List[int], num_qubits_total: int, iteration: int
-    ) -> typing.List[op.UnbuiltOperator]:
-        assert iteration + 1 < num_qubits_total
-        cnots = []
+        qubits: typing.List[int],
+        num_qubits_total: typing.Optional[int],
+        iteration: int,
+        *,
+        build: bool = True,
+    ) -> typing.List[typing.Union[op.UnbuiltOperator, op.BuiltOperator]]:
+        if len(qubits) <= 1:
+            return []
+
+        if iteration < 0 or iteration >= len(qubits):
+            raise ValueError("Iteration must be within the range of available qubits")
+
+        cnots: typing.List[typing.Union[op.UnbuiltOperator, op.BuiltOperator]] = []
         for ci in range(len(qubits)):
             ti = (ci + iteration + 1) % len(qubits)
-            cnots.append(op.CNOT(qubits[ci], qubits[ti]).build(num_qubits_total))
+            cnot = op.CNOT(qubits[ci], qubits[ti])
+            if build:
+                if num_qubits_total is None:
+                    raise ValueError("num_qubits_total must be provided to build CNOT gates")
+                cnots.append(cnot.build(num_qubits_total))
+            else:
+                cnots.append(cnot)
         return cnots
 
     def __str__(self) -> str:
         return "SEL"
 
-    def to_qasm(self) -> str:
-        return [g.to_qasm() for g in self.decompose()]  # type: ignore
+    def to_qasm(self) -> qasm.QasmRepresentation:
+        return _ops_to_qasm(self.decompose())
 
     def decompose(self) -> typing.List[op.UnbuiltOperator]:
         layers = []

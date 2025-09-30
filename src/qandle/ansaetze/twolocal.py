@@ -6,6 +6,7 @@ import qandle.config as config
 import qandle.operators as op
 import qandle.qasm as qasm
 import qandle.ansaetze.ansatz as ansatz
+from qandle.kernels import apply_CNOT
 
 __all__ = ["TwoLocal"]
 
@@ -76,9 +77,16 @@ class TwoLocalBuilt(ansatz.BuiltAnsatz):
         self.qubits = qubits or list(range(num_qubits))
         if q_params is None or q_params.shape != (depth, len(self.qubits)):
             q_params = torch.rand(depth, num_qubits)
-        self.register_buffer(
-            "cnot_matrices", self._get_cnot_matrix(self.qubits, self.num_qubits), persistent=False
+        self._use_dense = config.USE_DENSE_CONTROL_GATES
+        self._cnot_pairs = [
+            (self.qubits[ci], self.qubits[ci + 1]) for ci in range(len(self.qubits) - 1)
+        ]
+        dense = (
+            self._get_cnot_matrix(self.qubits, self.num_qubits)
+            if self._use_dense and self._cnot_pairs
+            else torch.empty(0, dtype=torch.cfloat)
         )
+        self.register_buffer("cnot_matrices", dense, persistent=False)
         layers = [
             [op.RY(qubit=w, theta=q_params[d, w]).build(num_qubits) for w in range(num_qubits)]
             for d in range(depth)
@@ -99,7 +107,13 @@ class TwoLocalBuilt(ansatz.BuiltAnsatz):
     def forward(self, state: torch.Tensor):
         for d in range(self.depth):
             state = self.mods[d](state)
-            state = self.cnot_matrices @ state
+            if not self._cnot_pairs:
+                continue
+            if self._use_dense:
+                state = self.cnot_matrices @ state
+            else:
+                for control, target in self._cnot_pairs:
+                    state = apply_CNOT(state, control, target, self.num_qubits)
         return state
 
     def __str__(self) -> str:

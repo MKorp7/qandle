@@ -3,10 +3,22 @@ import torch
 import qandle
 
 
+def _torch_device(num_qubits: int):
+    """Return a PennyLane device compatible with the Torch interface."""
+
+    for name in ("default.qubit.torch", "lightning.qubit", "default.qubit"):
+        try:
+            return qml.device(name, wires=num_qubits)
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+    raise RuntimeError("No suitable PennyLane device available")
+
+
 def test_measureprob():
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=3), interface="torch")
+    @qml.qnode(device=_torch_device(3), interface="torch")
     def pl_circuit(inp):
-        qml.QubitStateVector(inp, wires=range(3))
+        qml.StatePrep(inp, wires=range(3))
         return [qml.probs(w) for w in range(3)]
 
     inp = torch.rand(2**3, dtype=torch.cfloat)
@@ -19,9 +31,9 @@ def test_measureprob():
 
 
 def test_measureprob_batched():
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=3), interface="torch")
+    @qml.qnode(device=_torch_device(3), interface="torch")
     def pl_circuit(inp):
-        qml.QubitStateVector(inp, wires=range(3))
+        qml.StatePrep(inp, wires=range(3))
         return [qml.probs(w) for w in range(3)]
 
     inp = torch.rand(17, 2**3, dtype=torch.cfloat)
@@ -34,9 +46,9 @@ def test_measureprob_batched():
 
 
 def test_measurejoint_batched():
-    @qml.qnode(device=qml.device("default.qubit.torch", wires=3), interface="torch")
+    @qml.qnode(device=_torch_device(3), interface="torch")
     def pl_circuit(inp):
-        qml.QubitStateVector(inp, wires=range(3))
+        qml.StatePrep(inp, wires=range(3))
         return qml.probs(wires=range(3))
 
     inp = torch.rand(17, 2**3, dtype=torch.cfloat)

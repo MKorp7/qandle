@@ -1,9 +1,14 @@
 import pytest
-import torch
-import qandle
-from qandle import Circuit
-from qandle import MeasureJointProbability
 import random
+
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - optional dependency guard
+    pytestmark = pytest.mark.skip(reason="torch is required for MPS backend tests")
+else:
+    import qandle
+    from qandle import Circuit
+    from qandle import MeasureJointProbability
 
 
 def _assert_backends_agree(gates, num_qubits, backend_kwargs=None):
@@ -188,3 +193,32 @@ def test_mps_truncation_stats_and_cap():
     mps_backend = circuit(backend="mps", backend_kwargs={"max_bond_dim": 8})
     assert mps_backend.max_bond_used <= 8
     assert mps_backend.truncation_error >= 0.0
+
+
+def test_mps_phaseflip_noise_matches_statevector_probabilities():
+    gates = [
+        qandle.H(0, num_qubits=2),
+        qandle.CNOT(0, 1),
+        qandle.PhaseFlip(p=0.2, qubit=0),
+    ]
+    circuit = Circuit(gates, num_qubits=2)
+    vec_backend = circuit(backend="statevector")
+    mps_backend = circuit(backend="mps")
+    torch.testing.assert_close(
+        vec_backend.measure(), mps_backend.measure(), atol=1e-6, rtol=1e-6
+    )
+
+
+def test_mps_depolarizing_noise_matches_statevector_probabilities():
+    gates = [
+        qandle.H(0, num_qubits=2),
+        qandle.RX(1, theta=0.35, num_qubits=2),
+        qandle.CNOT(0, 1),
+        qandle.Depolarizing(p=0.15, qubit=1),
+    ]
+    circuit = Circuit(gates, num_qubits=2)
+    vec_backend = circuit(backend="statevector")
+    mps_backend = circuit(backend="mps")
+    torch.testing.assert_close(
+        vec_backend.measure(), mps_backend.measure(), atol=1e-6, rtol=1e-6
+    )

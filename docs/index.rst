@@ -19,6 +19,13 @@ To install the latest version of **qandle**, you can use pip:
 
 
 .. toctree::
+   :maxdepth: 1
+   :caption: Guides:
+
+   Benchmarking <benchmarking>
+
+
+.. toctree::
    :maxdepth: 2
    :caption: Module Documentation:
    :glob:

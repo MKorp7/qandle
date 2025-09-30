@@ -8,4 +8,6 @@ Tutorials
     00intro
     01helloquantum
     03barren
+    noise_presets
+    noise_channels
 

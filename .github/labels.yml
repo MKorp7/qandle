@@ -1,0 +1,24 @@
+- name: area:splitter
+  color: 1f77b4
+  description: "Changes related to the splitter component."
+- name: area:noise
+  color: ff7f0e
+  description: "Changes related to noise handling or mitigation."
+- name: area:backend
+  color: 2ca02c
+  description: "Backend-related changes."
+- name: perf
+  color: d62728
+  description: "Performance-related work or regressions."
+- name: docs
+  color: 9467bd
+  description: "Documentation improvements or fixes."
+- name: breaking
+  color: 8c564b
+  description: "Breaking changes that require coordination."
+- name: good-first-issue
+  color: 17becf
+  description: "Good for newcomers to the project."
+- name: needs-benchmark
+  color: e377c2
+  description: "Requires benchmarking or performance validation."

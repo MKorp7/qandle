@@ -4,5 +4,6 @@ from .stronglyentangling import StronglyEntanglingLayer
 from .twolocal import TwoLocal
 from .specialunitary import SpecialUnitary
 from .stronglyentangling_budget import StronglyEntanglingLayerBudget
+from .qml_templates import HardwareEfficientAnsatz, StronglyEntanglingLayers, QAOALayer
 
 SU = SpecialUnitary  # alias

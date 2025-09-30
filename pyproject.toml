@@ -22,7 +22,9 @@ dependencies = [
     "qW-Map>=0.1",
     "networkx>=3",
     "einops>=0.8",
-    "openqasm3[parser]>=1"
+    "openqasm3[parser]>=1",
+    "numpy>=1.24",
+    "psutil>=5.9",
 ]
 
 [project.urls]
@@ -34,13 +36,15 @@ repository = "https://github.com/gstenzel/qandle/"
 dev = [
     "PennyLane >=0.33",
     "pytest >=7.4",
+    "pytest-benchmark >=4.0",
     "pytest-cov >=5.0.0",
     "snakeviz >=2.2",
     "sphinx >=7.4.7",
     "myst-nb >=1.1.1",
     "sphinx-rtd-theme >=2.0.0",
     "ruff >=0.5.5",
-    "qiskit >=0.46"
+    "qiskit >=0.46",
+    "mypy >=1.10.0"
 ]
 
 [tool.pytest.ini_options]
@@ -52,9 +56,21 @@ _createautodoc = "sphinx-apidoc --separate -a -o ./docs/source ./src/qandle ./sr
 _sphinxbuild = "sphinx-build -M html ./docs/ ./docs/build"
 doc = ["_createautodoc", "_sphinxbuild"]
 format = "ruff check --output-format=github"
+lint = [
+    "ruff check src/qandle/__init__.py src/qandle/utils/__init__.py src/qandle/utils/compile.py scripts/check_import_surface.py",
+    "mypy",
+    "python -m scripts.check_import_surface",
+]
 
 [tool.ruff]
 line-length = 100
+exclude = [
+    "benchmarks",
+    "docs",
+    "tests",
+    "scripts/benchmarks",
+    "scripts/benchmark_pairwise_rotation.py",
+]
 
 [tool.ruff.format]
 line-ending = "auto"

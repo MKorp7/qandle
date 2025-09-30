@@ -48,6 +48,7 @@ import torch
 import warnings
 
 from .. import qasm
+from .. import utils_gates
 from ..operators import BuiltOperator, UnbuiltOperator
 
 __all__ = [
@@ -271,6 +272,18 @@ class NoiseChannel(UnbuiltOperator):
         # Sort targets for ergonomic usage; duplicates are checked during build.
         self.targets = tuple(sorted(targets))
 
+    def _validate_build(self, num_qubits: int) -> None:
+        if not self.targets:
+            raise ValueError("at least one target required")
+        if len(set(self.targets)) != len(self.targets):
+            raise ValueError(
+                f"targets must be unique; got targets={self.targets} with num_qubits={num_qubits}"
+            )
+        if any(t < 0 or t >= num_qubits for t in self.targets):
+            raise ValueError(
+                f"target index out of range for num_qubits={num_qubits}; targets={self.targets}"
+            )
+
     # ------------------------------------------------------------------
     # Interfaces to override
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
@@ -290,17 +303,7 @@ class NoiseChannel(UnbuiltOperator):
 
     # Building ----------------------------------------------------------
     def build(self, num_qubits: int, **kwargs) -> "BuiltNoiseChannel":  # type: ignore[override]
-        # validate targets
-        if not self.targets:
-            raise ValueError("at least one target required")
-        if len(set(self.targets)) != len(self.targets):
-            raise ValueError(
-                f"targets must be unique; got targets={self.targets} with num_qubits={num_qubits}"
-            )
-        if any(t < 0 or t >= num_qubits for t in self.targets):
-            raise ValueError(
-                f"target index out of range for num_qubits={num_qubits}; targets={self.targets}"
-            )
+        self._validate_build(num_qubits)
         return BuiltNoiseChannel(channel=self, num_qubits=num_qubits)
 
 
@@ -347,32 +350,17 @@ class BuiltNoiseChannel(BuiltOperator):
     def forward(self, state: torch.Tensor, *, trajectory: bool = False, rng=None) -> torch.Tensor:
         """Apply the channel to ``state``.
 
-        Real inputs are promoted to ``complex64``. ``trajectory=True`` performs
-        stochastic Kraus sampling and is therefore non-differentiable.
-        ``state`` must already live on the desired device.
-
-        Example
-        -------
-        Re-seeding a :class:`torch.Generator` yields identical trajectory
-        outcomes:
-
-        >>> ch = PhaseFlip(p=0.1, qubit=0).build(num_qubits=1)
-        >>> psi = torch.tensor([1.0, 0.0], dtype=torch.complex64)
-        >>> gen = torch.Generator().manual_seed(0)
-        >>> out1 = ch(psi, trajectory=True, rng=gen)
-        >>> gen.manual_seed(0)
-        >>> out2 = ch(psi, trajectory=True, rng=gen)
-        >>> torch.allclose(out1, out2)
-        True
-
+        ``trajectory=True`` preserves the original behaviour of sampling a
+        single Kraus operator.  For deterministic evolution on statevectors we
+        instead apply an affine mixture of outcomes and renormalise the result,
+        mirroring the effective operator picture used by the backends.
+        Density matrices continue to use the exact Kraus application.
         """
+
         if getattr(self.channel, "is_identity", False):
             return state
 
         if not torch.is_complex(state):
-            # Promote real inputs to an appropriate complex dtype.  ``float64``
-            # (and ``double`` aliases) are promoted to ``complex128`` while all
-            # lower precision types use ``complex64``.
             if state.dtype == torch.float64:
                 state = state.to(torch.complex128)
             else:
@@ -381,10 +369,11 @@ class BuiltNoiseChannel(BuiltOperator):
         dtype = state.dtype
         device = state.device
         eps = torch.finfo(state.real.dtype).eps
-        kraus = self._local_kraus(dtype, device)
-        assert all(k.device == device for k in kraus), "Kraus/device mismatch"
 
-        if trajectory:  # statevector
+        if trajectory:  # statevector sampling (unchanged behaviour)
+            kraus = self._local_kraus(dtype, device)
+            assert all(k.device == device for k in kraus), "Kraus/device mismatch"
+
             batched = state.dim() > 1
             if not batched:
                 state = state.unsqueeze(0)
@@ -408,9 +397,27 @@ class BuiltNoiseChannel(BuiltOperator):
                 out = out.squeeze(0)
             return out
 
-        # density matrix mode
+        is_density = state.dim() >= 2 and state.shape[-1] == state.shape[-2]
+        if not is_density:
+            mixed = self._apply_state_mix(state)
+            if mixed is None:
+                raise NotImplementedError(
+                    "Deterministic statevector evolution is not implemented for this channel; "
+                    "use trajectory=True to sample Kraus operators."
+                )
+            norm = torch.linalg.vector_norm(mixed, dim=-1, keepdim=True)
+            norm = norm.clamp_min(eps ** 0.5)
+            return mixed / norm
+
+        kraus = self._local_kraus(dtype, device)
+        assert all(k.device == device for k in kraus), "Kraus/device mismatch"
         k_stack = torch.stack(kraus, dim=0)
         return _apply_kraus_density_all(state, k_stack, self._perm_cache)
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor | None:
+        """Return the affine combination for deterministic statevector evolution."""
+
+        return None
 
     def to_kraus(
         self,
@@ -480,6 +487,59 @@ class BuiltNoiseChannel(BuiltOperator):
 # Actual Kraus based channels
 
 
+class BuiltPhaseFlip(BuiltNoiseChannel):
+    def __init__(self, channel: "PhaseFlip", num_qubits: int):
+        super().__init__(channel=channel, num_qubits=num_qubits)
+        self.qubit = channel.targets[0]
+        self.p = channel.p
+        # Pre-compute bit-mask for quick sign flips in the computational basis.
+        self._bitmask = 1 << (self.num_qubits - 1 - self.qubit)
+        self._phase_cache: dict[tuple[torch.device, torch.dtype], torch.Tensor] = {}
+        self._matrix_cache: dict[tuple[torch.device, torch.dtype], torch.Tensor] = {}
+
+    def __str__(self) -> str:  # pragma: no cover - tiny wrapper
+        return f"PhaseFlip(p={self.p}){_format_targets(self.targets)}"
+
+    def to(self, *args, **kwargs):  # type: ignore[override]
+        out = super().to(*args, **kwargs)
+        self._phase_cache.clear()
+        self._matrix_cache.clear()
+        return out
+
+    def _phase_vector(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        key = (device, dtype)
+        cached = self._phase_cache.get(key)
+        if cached is None:
+            dim = 1 << self.num_qubits
+            indices = torch.arange(dim, dtype=torch.int64, device=device)
+            phases = torch.ones(dim, dtype=dtype, device=device)
+            phases[(indices & self._bitmask) != 0] = -1
+            cached = phases
+            self._phase_cache[key] = cached
+        return cached
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor:
+        phases = self._phase_vector(state.device, state.dtype)
+        flipped = state * phases
+        return (1 - self.p) * state + self.p * flipped
+
+    def _z_matrix(self, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+        key = (device, dtype)
+        cached = self._matrix_cache.get(key)
+        if cached is None:
+            z_gate = utils_gates.Z(self.qubit, self.num_qubits).to(device=device, dtype=dtype)
+            cached = z_gate.to_matrix()
+            self._matrix_cache[key] = cached
+        return cached
+
+    def to_matrix(self, **kwargs) -> torch.Tensor:
+        dtype = kwargs.get("dtype", torch.cfloat)
+        device = kwargs.get("device") or torch.device("cpu")
+        i = torch.eye(2 ** self.num_qubits, dtype=dtype, device=device)
+        z = self._z_matrix(dtype, device)
+        return (1 - self.p) * i + self.p * z
+
+
 class PhaseFlip(NoiseChannel):
     """Phase flip channel with probability ``p``.
 
@@ -501,6 +561,10 @@ class PhaseFlip(NoiseChannel):
 
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"PhaseFlip(p={self.p}){_format_targets(self.targets)}"
+
+    def build(self, num_qubits: int, **kwargs) -> BuiltNoiseChannel:  # type: ignore[override]
+        self._validate_build(num_qubits)
+        return BuiltPhaseFlip(channel=self, num_qubits=num_qubits)
 
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
         device = device or torch.device("cpu")
@@ -526,6 +590,10 @@ class Depolarizing(NoiseChannel):
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"Depolarizing(p={self.p}){_format_targets(self.targets)}"
 
+    def build(self, num_qubits: int, **kwargs) -> BuiltNoiseChannel:  # type: ignore[override]
+        self._validate_build(num_qubits)
+        return BuiltDepolarizing(channel=self, num_qubits=num_qubits)
+
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
         device = device or torch.device("cpu")
         eye = torch.eye(2, dtype=dtype, device=device)
@@ -536,6 +604,35 @@ class Depolarizing(NoiseChannel):
         s0 = torch.sqrt(1 - p)
         s = torch.sqrt(p / 3)
         return [s0 * eye, s * X, s * Y, s * Z]
+
+
+class BuiltDepolarizing(BuiltNoiseChannel):
+    def __init__(self, channel: "Depolarizing", num_qubits: int):
+        super().__init__(channel=channel, num_qubits=num_qubits)
+        self.qubit = channel.targets[0]
+        self.p = channel.p
+        self._x = utils_gates.X(self.qubit, num_qubits)
+        self._y = utils_gates.Y(self.qubit, num_qubits)
+        self._z = utils_gates.Z(self.qubit, num_qubits)
+
+    def __str__(self) -> str:  # pragma: no cover - tiny wrapper
+        return f"Depolarizing(p={self.p}){_format_targets(self.targets)}"
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor:
+        self._x = self._x.to(device=state.device, dtype=state.dtype)
+        self._y = self._y.to(device=state.device, dtype=state.dtype)
+        self._z = self._z.to(device=state.device, dtype=state.dtype)
+        errors = self._x(state) + self._y(state) + self._z(state)
+        return (1 - self.p) * state + (self.p / 3.0) * errors
+
+    def to_matrix(self, **kwargs) -> torch.Tensor:
+        dtype = kwargs.get("dtype", self._x.matrix.dtype)
+        device = kwargs.get("device", self._x.matrix.device)
+        i = torch.eye(2 ** self.num_qubits, dtype=dtype, device=device)
+        x = self._x.to_matrix().to(dtype=dtype, device=device)
+        y = self._y.to_matrix().to(dtype=dtype, device=device)
+        z = self._z.to_matrix().to(dtype=dtype, device=device)
+        return (1 - self.p) * i + (self.p / 3.0) * (x + y + z)
 
 
 class Dephasing(NoiseChannel):
@@ -562,6 +659,10 @@ class Dephasing(NoiseChannel):
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"Dephasing(gamma={self.gamma}){_format_targets(self.targets)}"
 
+    def build(self, num_qubits: int, **kwargs) -> BuiltNoiseChannel:  # type: ignore[override]
+        self._validate_build(num_qubits)
+        return BuiltPhaseDamping(channel=self, num_qubits=num_qubits)
+
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
         device = device or torch.device("cpu")
         eye = torch.eye(2, dtype=dtype, device=device)
@@ -569,6 +670,40 @@ class Dephasing(NoiseChannel):
         P1 = torch.tensor([[0, 0], [0, 1]], dtype=dtype, device=device)
         g = torch.tensor(self.gamma, dtype=dtype, device=device)
         return [torch.sqrt(1 - g) * eye, torch.sqrt(g) * P0, torch.sqrt(g) * P1]
+
+
+class BuiltPhaseDamping(BuiltNoiseChannel):
+    def __init__(self, channel: "Dephasing", num_qubits: int):
+        super().__init__(channel=channel, num_qubits=num_qubits)
+        self.qubit = channel.targets[0]
+        self.gamma = channel.gamma
+        from ..operators import U
+
+        k0 = torch.tensor(
+            [[1.0, 0.0], [0.0, (1.0 - self.gamma) ** 0.5]],
+            dtype=torch.cfloat,
+        )
+        k1 = torch.tensor(
+            [[0.0, 0.0], [0.0, self.gamma ** 0.5]],
+            dtype=torch.cfloat,
+        )
+        self._k0 = U(qubit=self.qubit, matrix=k0).build(num_qubits=num_qubits)
+        self._k1 = U(qubit=self.qubit, matrix=k1).build(num_qubits=num_qubits)
+
+    def __str__(self) -> str:  # pragma: no cover - tiny wrapper
+        return f"Dephasing(gamma={self.gamma}){_format_targets(self.targets)}"
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor:
+        self._k0 = self._k0.to(device=state.device, dtype=state.dtype)
+        self._k1 = self._k1.to(device=state.device, dtype=state.dtype)
+        return self._k0(state) + self._k1(state)
+
+    def to_matrix(self, **kwargs) -> torch.Tensor:
+        dtype = kwargs.get("dtype", torch.cfloat)
+        device = kwargs.get("device", self._k0.matrix.device)
+        k0 = self._k0.to_matrix().to(dtype=dtype, device=device)
+        k1 = self._k1.to_matrix().to(dtype=dtype, device=device)
+        return k0 + k1
 
 
 class AmplitudeDamping(NoiseChannel):
@@ -587,12 +722,50 @@ class AmplitudeDamping(NoiseChannel):
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"AmplitudeDamping(gamma={self.gamma}){_format_targets(self.targets)}"
 
+    def build(self, num_qubits: int, **kwargs) -> BuiltNoiseChannel:  # type: ignore[override]
+        self._validate_build(num_qubits)
+        return BuiltAmplitudeDamping(channel=self, num_qubits=num_qubits)
+
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
         device = device or torch.device("cpu")
         g = torch.tensor(self.gamma, dtype=dtype, device=device)
         k0 = torch.tensor([[1.0, 0.0], [0.0, torch.sqrt(1 - g)]], dtype=dtype, device=device)
         k1 = torch.tensor([[0.0, torch.sqrt(g)], [0.0, 0.0]], dtype=dtype, device=device)
         return [k0, k1]
+
+
+class BuiltAmplitudeDamping(BuiltNoiseChannel):
+    def __init__(self, channel: "AmplitudeDamping", num_qubits: int):
+        super().__init__(channel=channel, num_qubits=num_qubits)
+        self.qubit = channel.targets[0]
+        self.gamma = channel.gamma
+        from ..operators import U  # local import to avoid circular dependency at module import time
+
+        k0 = torch.tensor(
+            [[1.0, 0.0], [0.0, (1.0 - self.gamma) ** 0.5]],
+            dtype=torch.cfloat,
+        )
+        k1 = torch.tensor(
+            [[0.0, self.gamma ** 0.5], [0.0, 0.0]],
+            dtype=torch.cfloat,
+        )
+        self._k0 = U(qubit=self.qubit, matrix=k0).build(num_qubits=num_qubits)
+        self._k1 = U(qubit=self.qubit, matrix=k1).build(num_qubits=num_qubits)
+
+    def __str__(self) -> str:  # pragma: no cover - tiny wrapper
+        return f"AmplitudeDamping(gamma={self.gamma}){_format_targets(self.targets)}"
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor:
+        self._k0 = self._k0.to(device=state.device, dtype=state.dtype)
+        self._k1 = self._k1.to(device=state.device, dtype=state.dtype)
+        return self._k0(state) + self._k1(state)
+
+    def to_matrix(self, **kwargs) -> torch.Tensor:
+        dtype = kwargs.get("dtype", torch.cfloat)
+        device = kwargs.get("device", self._k0.matrix.device)
+        k0 = self._k0.to_matrix().to(dtype=dtype, device=device)
+        k1 = self._k1.to_matrix().to(dtype=dtype, device=device)
+        return k0 + k1
 
 
 class CorrelatedDepolarizing(NoiseChannel):
@@ -613,6 +786,10 @@ class CorrelatedDepolarizing(NoiseChannel):
     def __str__(self) -> str:  # pragma: no cover - tiny wrapper
         return f"CorrelatedDepolarizing(p={self.p}){_format_targets(self.targets)}"
 
+    def build(self, num_qubits: int, **kwargs) -> BuiltNoiseChannel:  # type: ignore[override]
+        self._validate_build(num_qubits)
+        return BuiltCorrelatedDepolarizing(channel=self, num_qubits=num_qubits)
+
     def to_kraus(self, *, dtype=torch.complex64, device=None) -> List[torch.Tensor]:
         device = device or torch.device("cpu")
         eye = torch.eye(2, dtype=dtype, device=device)
@@ -628,6 +805,44 @@ class CorrelatedDepolarizing(NoiseChannel):
             s * torch.kron(Y, Y),
             s * torch.kron(Z, Z),
         ]
+
+
+class BuiltCorrelatedDepolarizing(BuiltNoiseChannel):
+    def __init__(self, channel: "CorrelatedDepolarizing", num_qubits: int):
+        super().__init__(channel=channel, num_qubits=num_qubits)
+        (self.a, self.b) = channel.targets
+        self.p = channel.p
+        self._xa = utils_gates.X(self.a, num_qubits)
+        self._ya = utils_gates.Y(self.a, num_qubits)
+        self._za = utils_gates.Z(self.a, num_qubits)
+        self._xb = utils_gates.X(self.b, num_qubits)
+        self._yb = utils_gates.Y(self.b, num_qubits)
+        self._zb = utils_gates.Z(self.b, num_qubits)
+
+    def __str__(self) -> str:  # pragma: no cover - tiny wrapper
+        return f"CorrelatedDepolarizing(p={self.p}){_format_targets(self.targets)}"
+
+    def _apply_pair(self, ga: BuiltOperator, gb: BuiltOperator, state: torch.Tensor) -> torch.Tensor:
+        ga = ga.to(device=state.device, dtype=state.dtype)
+        gb = gb.to(device=state.device, dtype=state.dtype)
+        return gb(ga(state))
+
+    def _apply_state_mix(self, state: torch.Tensor) -> torch.Tensor:
+        mix = (
+            self._apply_pair(self._xa, self._xb, state)
+            + self._apply_pair(self._ya, self._yb, state)
+            + self._apply_pair(self._za, self._zb, state)
+        ) / 3.0
+        return (1 - self.p) * state + self.p * mix
+
+    def to_matrix(self, **kwargs) -> torch.Tensor:
+        dtype = kwargs.get("dtype", torch.cfloat)
+        device = kwargs.get("device", self._xa.matrix.device)
+        i = torch.eye(2 ** self.num_qubits, dtype=dtype, device=device)
+        xx = self._xb.to_matrix().to(dtype=dtype, device=device) @ self._xa.to_matrix().to(dtype=dtype, device=device)
+        yy = self._yb.to_matrix().to(dtype=dtype, device=device) @ self._ya.to_matrix().to(dtype=dtype, device=device)
+        zz = self._zb.to_matrix().to(dtype=dtype, device=device) @ self._za.to_matrix().to(dtype=dtype, device=device)
+        return (1 - self.p) * i + (self.p / 3.0) * (xx + yy + zz)
 
 
 # Backwards compatibility alias ------------------------------------------------

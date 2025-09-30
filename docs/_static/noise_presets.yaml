@@ -1,0 +1,120 @@
+# Noise model presets derived from public specs for common hardware families.
+# "broadcast" controls how each channel is expanded when building a NoiseModel:
+#   per_qubit   -> replicate for every qubit in the register.
+#   per_target  -> apply to each qubit the gate acts on.
+#   per_pair    -> apply to the ordered pairs of qubits in a multi-qubit gate.
+# The loader snippet in docs/tutorial/noise_presets.rst shows how to interpret
+# these directives when translating the YAML into qandle.noise objects.
+
+quantinuum-h1:
+  family: "Quantinuum H-Series"
+  description: "Approximate mirror of the public H1 emulator defaults"
+  references:
+    - "https://docs.quantinuum.com"
+  global_noise:
+    after:
+      - channel: "Dephasing"
+        broadcast: "per_qubit"
+        params:
+          gamma: 1.22e-1
+    before:
+      - channel: "Depolarizing"
+        broadcast: "per_qubit"
+        params:
+          p: 2.1e-5
+  channels:
+    default_1q:
+      after:
+        - channel: "Depolarizing"
+          broadcast: "per_target"
+          params:
+            p: 2.1e-5
+    default_2q:
+      after:
+        - channel: "CorrelatedDepolarizing"
+          broadcast: "per_pair"
+          params:
+            p: 8.8e-4
+  measurement:
+    bitflip:
+      p0_to_1: 1.0e-3
+      p1_to_0: 4.0e-3
+  initialization:
+    fault_probability: 3.6e-5
+
+ionq-aria-1:
+  family: "IonQ Aria"
+  description: "Hardware-aligned depolarizing model for Aria-1"
+  references:
+    - "https://docs.ionq.com"
+  channels:
+    default_1q:
+      after:
+        - channel: "Depolarizing"
+          broadcast: "per_target"
+          params:
+            p: 5.0e-4
+    default_2q:
+      after:
+        - channel: "CorrelatedDepolarizing"
+          broadcast: "per_pair"
+          params:
+            p: 1.33e-2
+  measurement:
+    spam_error: 4.0e-3
+
+ionq-forte-1:
+  family: "IonQ Forte"
+  description: "Hardware-aligned depolarizing model for Forte-1"
+  references:
+    - "https://docs.ionq.com"
+  channels:
+    default_1q:
+      after:
+        - channel: "Depolarizing"
+          broadcast: "per_target"
+          params:
+            p: 2.67e-4
+    default_2q:
+      after:
+        - channel: "CorrelatedDepolarizing"
+          broadcast: "per_pair"
+          params:
+            p: 4.949e-3
+  measurement:
+    spam_error: 4.0e-3
+
+ibm-generic-127q:
+  family: "IBM Quantum"
+  description: "Representative numbers for a 127-qubit Eagle-class system"
+  references:
+    - "https://eu-de.quantum.cloud.ibm.com"
+  assumptions:
+    t1_seconds: 3.5e-4
+    t2_seconds: 1.5e-4
+    single_qubit_gate_ns: 35
+    two_qubit_gate_ns: 300
+    readout_error: 0.02
+  channels:
+    default_1q:
+      after:
+        - channel: "AmplitudeDamping"
+          broadcast: "per_target"
+          params:
+            gamma: 1.0e-4
+        - channel: "Dephasing"
+          broadcast: "per_target"
+          params:
+            gamma: 1.8332e-4
+    default_2q:
+      after:
+        - channel: "AmplitudeDamping"
+          broadcast: "per_pair"
+          params:
+            gamma: 8.5678e-4
+        - channel: "Dephasing"
+          broadcast: "per_pair"
+          params:
+            gamma: 1.5702e-3
+  measurement:
+    assignment_error: 0.02

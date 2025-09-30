@@ -1,0 +1,41 @@
+name: Performance benchmarks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  micro-benchmarks:
+    name: Micro benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv pip install -e .[dev]
+      - name: Run pytest-benchmark suite
+        run: >-
+          uv run pytest benchmarks/perf --benchmark-only
+          --benchmark-json=benchmarks/perf/latest.json
+          --benchmark-save=ci
+      - name: Compare against baseline
+        run: >-
+          uv run python benchmarks/perf/compare.py
+          benchmarks/perf/baseline.json
+          benchmarks/perf/latest.json
+          --report benchmarks/perf/latest.md
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: micro-benchmark-report
+          path: |
+            benchmarks/perf/latest.json
+            benchmarks/perf/latest.md
+            .benchmarks/**
+          if-no-files-found: warn

@@ -1,3 +1,5 @@
+import os
+
 import qw_map
 
 DEFAULT_MAPPING = qw_map.tanh
@@ -10,6 +12,15 @@ naive usage, set :code:`DEFAULT_MAPPING = lambda x: x` or
 `arxiv paper 1 <https://arxiv.org/abs/2212.14807>`_ and `arxiv paper 2
 <https://arxiv.org/abs/2306.05776>`_.
 """
+
+
+USE_DENSE_CONTROL_GATES = os.environ.get("QANDLE_USE_DENSE_CONTROL", "0").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+"""Feature flag to restore dense control-gate matrices for regression testing."""
 
 DRAW_SPLITTED_PAD = 7
 """Number of spaces between columns in the drawer for splitted circuits."""

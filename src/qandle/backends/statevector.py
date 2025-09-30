@@ -1,7 +1,12 @@
-import torch
 import math
 from typing import Sequence
+
+import torch
+
+from .. import utils
+
 from . import QuantumBackend
+from ..kernels import apply_one_qubit, apply_two_qubit
 
 class StateVectorBackend(QuantumBackend):
     """State-vector simulator."""
@@ -13,8 +18,11 @@ class StateVectorBackend(QuantumBackend):
 
     def allocate(self, n_qubits: int):
         self.n_qubits = n_qubits
-        self.state = torch.zeros(2 ** n_qubits, dtype=self.dtype, device=self.device)
-        self.state[0] = 1
+        basis = torch.nn.functional.one_hot(
+            torch.tensor(0, device=self.device, dtype=torch.long),
+            num_classes=2 ** n_qubits,
+        ).to(self.dtype)
+        self.state = basis
         return self
 
     def _apply_gate_dense(self, gate: torch.Tensor, qubits: Sequence[int]):
@@ -35,7 +43,7 @@ class StateVectorBackend(QuantumBackend):
             idx0 = 0
             idx1 = 1 << (n - q - 1)
             gate = gate[[idx0, idx1]][:, [idx0, idx1]]
-        self._apply_gate_dense(gate, [q])
+        self.state = apply_one_qubit(self.state, gate, q, self.n_qubits)
 
     def apply_2q(self, gate: torch.Tensor, q1: int, q2: int):
         if gate.shape[0] != 4:
@@ -43,21 +51,11 @@ class StateVectorBackend(QuantumBackend):
             idx = lambda b1, b2: ((b1 << (n - q1 - 1)) | (b2 << (n - q2 - 1)))
             sel = [idx(0,0), idx(0,1), idx(1,0), idx(1,1)]
             gate = gate[sel][:, sel]
-        self._apply_gate_dense(gate, [q1, q2])
+        self.state = apply_two_qubit(self.state, gate, q1, q2, self.n_qubits)
 
     def apply_dense(self, gate: torch.Tensor, qubits: Sequence[int]):
         self._apply_gate_dense(gate, qubits)
 
     def measure(self, qubits: Sequence[int] | None = None) -> torch.Tensor:
-        probs = self.state.abs() ** 2
-        if qubits is None:
-            return probs
-        n = self.n_qubits
-        out = torch.zeros(2 ** len(qubits), dtype=probs.dtype, device=probs.device)
-        for i, p in enumerate(probs):
-            key = 0
-            for j, q in enumerate(qubits):
-                bit = (i >> (n - q - 1)) & 1
-                key |= bit << j
-            out[key] += p
-        return out
+        probs = (self.state.abs() ** 2).real
+        return utils.marginal_probabilities(probs, qubits, self.n_qubits)

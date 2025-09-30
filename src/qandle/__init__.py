@@ -1,4 +1,6 @@
-# ruff: noqa: F403 F401
+# ruff: noqa: F403 F401 F405
+
+from typing import Any
 
 from .qcircuit import *
 from .measurements import *
@@ -13,12 +15,39 @@ from .operators import *
 from .noise import *
 from .simulators import *
 from .utils import *
+from .utils import (
+    do_not_implement,
+    get_matrix_transforms,
+    marginal_probabilities,
+    parse_rot,
+    reduce_dot,
+)
+from .utils.compile import compile, is_available as compile_available
 from .qasm import *
 
 from .utils_gates import H, X, Y, Z, S, T
 
+__all__ = [
+    "Circuit",
+    "H",
+    "X",
+    "Y",
+    "Z",
+    "S",
+    "T",
+    "compile",
+    "compile_available",
+    "config",
+    "do_not_implement",
+    "draw",
+    "get_matrix_transforms",
+    "marginal_probabilities",
+    "parse_rot",
+    "reduce_dot",
+]
 
-def __reimport():  # pragma: no cover
+
+def __reimport() -> None:  # pragma: no cover
     print("reimporting qandle")
     import importlib
     import sys
@@ -37,5 +66,5 @@ def __reimport():  # pragma: no cover
         pass
 
 
-def __count_parameters(model):
+def __count_parameters(model: Any) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)

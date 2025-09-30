@@ -1,12 +1,14 @@
-import typing
+from __future__ import annotations
+
+from typing import Any, Callable, Sequence, cast
+
 import einops.layers.torch as einl
 import torch
 
 
-def reduce_dot(*args):
-    """
-    Compute the dot product of a series of matrices.
-    """
+def reduce_dot(*args: torch.Tensor) -> torch.Tensor:
+    """Compute the dot product of a series of matrices."""
+
     if len(args) == 1:
         return args[0]
     matrix = args[0]
@@ -23,23 +25,60 @@ def reduce_dot(*args):
     return matrix
 
 
-def parse_rot(rot: str):
-    from . import operators as op
+def marginal_probabilities(
+    probabilities: torch.Tensor,
+    qubits: Sequence[int] | int | None,
+    n_qubits: int,
+) -> torch.Tensor:
+    """Aggregate marginal probabilities for ``qubits``."""
+
+    if qubits is None:
+        return probabilities
+
+    if isinstance(qubits, int):
+        qubit_list: list[int] = [qubits]
+    else:
+        qubit_list = list(qubits)
+
+    if len(qubit_list) == 0:
+        result_dtype = probabilities.dtype
+        return torch.ones(1, dtype=result_dtype, device=probabilities.device)
+
+    indices = torch.arange(probabilities.shape[0], device=probabilities.device)
+    shifts = torch.tensor(
+        [n_qubits - q - 1 for q in qubit_list],
+        device=probabilities.device,
+        dtype=indices.dtype,
+    )
+    bits = ((indices.unsqueeze(-1) >> shifts) & 1).to(indices.dtype)
+    weights = (1 << torch.arange(len(qubit_list), device=probabilities.device, dtype=indices.dtype))
+    keys = (bits * weights).sum(dim=-1)
+    out = torch.zeros(1 << len(qubit_list), dtype=probabilities.dtype, device=probabilities.device)
+    return torch.scatter_add(out, 0, keys, probabilities)
+
+
+def parse_rot(rot: str) -> type[torch.nn.Module]:
+    from .. import operators as op
 
     rot = rot.lower().replace("r", "")
     if rot == "x":
-        return op.RX
+        return cast(type[torch.nn.Module], op.RX)
     elif rot == "y":
-        return op.RY
+        return cast(type[torch.nn.Module], op.RY)
     elif rot == "z":
-        return op.RZ
+        return cast(type[torch.nn.Module], op.RZ)
     else:
         raise ValueError(f"Unknown rotation {rot}")
 
 
-def do_not_implement(*protected, reason="") -> type:
+def do_not_implement(*protected: str, reason: str = "") -> type:
     class LimitedClass(type):
-        def __new__(cls, name, bases, attrs):
+        def __new__(
+            cls,
+            name: str,
+            bases: tuple[type[Any], ...],
+            attrs: dict[str, Any],
+        ) -> type[Any]:
             for attribute in attrs:
                 if attribute in protected:
                     if reason:
@@ -52,11 +91,10 @@ def do_not_implement(*protected, reason="") -> type:
 
 
 def get_matrix_transforms(
-    num_qubits: int, in_circuit: typing.List[int]
-) -> typing.Tuple[einl.Rearrange, einl.Rearrange]:
-    """
-    Get einops layers for transforming between state and matrix representation of a subcircuit.
-    """
+    num_qubits: int, in_circuit: Sequence[int]
+) -> tuple[einl.Rearrange, einl.Rearrange]:
+    """Get einops layers for transforming between state and matrix representations."""
+
     qubits_in_subc = [f"a{i}" for i in in_circuit]
     qubits_not_in_subc = [f"a{i}" for i in range(num_qubits) if i not in in_circuit]
     all_qubits = [f"a{i}" for i in range(num_qubits)]
@@ -70,24 +108,17 @@ def get_matrix_transforms(
     return to_matrix, to_state
 
 
-def __analyze_barren_plateu(
-    circuit, loss_f=lambda x: x[0], num_points=30, other_params=0.1
-):  # pragma: no cover
-    """
-    Analyze, whether a circuit has a barren plateau for a given loss function,
-    by checking the gradient of the loss function for num_points parameters (while keeping the rest fixed).
-    """
-    # sel = qandle.StronglyEntanglingLayer(num_qubits=3, depth=8, rotations=["rz", "ry", "rz"], remapping=None)
-    # qc =  qandle.QCircuit(3, layers=[*sel.decompose(), ])
-    # grads, losses, params, names = analyze_barren_plateu(qc)
-    # fig, ax = plt.subplots(ncols=2, sharey=True, sharex=True, figsize=(15, 7))
-    # ax[0].imshow(grads,)
-    # ax[1].imshow(losses,)
-    # ax[0].set_xticks(np.arange(len(params))[::3], labels=[f"{p.item():.2f}" for p in params[::3]])
-    # ax[0].set_yticks(np.arange(len(names)), labels=names)
-    # fig.tight_layout()
+def _default_loss(value: torch.Tensor) -> torch.Tensor:
+    return value[0]
 
-    import torch
+
+def __analyze_barren_plateu(
+    circuit: torch.nn.Module,
+    loss_f: Callable[[torch.Tensor], torch.Tensor] = _default_loss,
+    num_points: int = 30,
+    other_params: float = 0.1,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]]:  # pragma: no cover
+    """Analyze gradients of a circuit to detect barren plateaus."""
 
     possible_params = torch.linspace(-torch.pi, torch.pi, num_points, requires_grad=True)
     zerosd = {
@@ -102,8 +133,8 @@ def __analyze_barren_plateu(
             sd = zerosd.copy()
             sd[pname] = theta
             circuit.load_state_dict(sd)
-            for p in circuit.parameters():
-                p.requires_grad = True
+            for param in circuit.parameters():
+                param.requires_grad = True
             circuit.zero_grad()
             loss = loss_f(circuit())
             loss.backward()

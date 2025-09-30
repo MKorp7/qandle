@@ -9,6 +9,7 @@ from .channels import (
     CorrelatedDepolarizing,
 )
 from .model import NoiseModel
+from .presets import NoisePreset, load_presets
 
 __all__ = [
     "NoiseChannel",
@@ -20,4 +21,6 @@ __all__ = [
     "AmplitudeDamping",
     "CorrelatedDepolarizing",
     "NoiseModel",
+    "NoisePreset",
+    "load_presets",
 ]

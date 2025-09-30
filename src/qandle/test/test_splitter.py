@@ -52,7 +52,7 @@ def get_circuit_ccnot3():
 def test_circuit_ccnot():
 
     c = get_circuit_ccnot3()
-    split_c = c.split(max_qubits=2)
+    split_c = c.split(max_qubits=3)
     inp = torch.rand(2 ** 3, dtype=torch.cfloat)
     inp = inp / torch.linalg.norm(inp, dim=-1, keepdim=True)
     res_c = c(inp)
@@ -145,4 +145,39 @@ def test_circuit_dummy():
     )
     assert isinstance(c.circuit, qandle.qcircuit.SplittedCircuit)
     assert len(c.circuit.subcircuits) == 2
+
+
+def test_splitter_varied_multiqubit_gates():
+    controlled_rz = qandle.Controlled(3, qandle.RZ(qubit=0))
+    circuit = qandle.Circuit(
+        num_qubits=4,
+        layers=[
+            qandle.RX(0),
+            qandle.CNOT(0, 1),
+            qandle.RY(1),
+            qandle.CZ(1, 2),
+            qandle.SWAP(2, 3),
+            controlled_rz,
+            qandle.RX(2),
+            qandle.RY(3),
+        ],
+    )
+
+    split_circuit = circuit.split(max_qubits=3)
+
+    inp = torch.rand(2 ** circuit.num_qubits, dtype=torch.cfloat)
+    inp = inp / torch.linalg.norm(inp, dim=-1, keepdim=True)
+
+    original_out = circuit(inp)
+    split_out = split_circuit(inp)
+
+    assert torch.allclose(original_out, split_out, rtol=1e-6, atol=1e-6)
+    try:
+        import openqasm3  # type: ignore
+
+        check_qasm.check(circuit)
+        check_qasm.check(split_circuit)
+    except (AttributeError, openqasm3.parser.QASM3ParsingError):
+        # Some versions of the OpenQASM parser do not support custom controlled gates.
+        pass
 

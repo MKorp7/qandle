@@ -12,6 +12,7 @@ from qandle.noise import (
     AmplitudeDamping,
     CorrelatedDepolarizing,
 )
+from qandle.measurements import MeasureProbabilityBuilt
 from qandle.noise.channels import NEAR_ZERO
 
 
@@ -516,4 +517,94 @@ def test_to_global_superoperator_warns_large_system(monkeypatch):
     )
     with pytest.warns(UserWarning):
         ch.to_global_superoperator()
+
+
+def test_phaseflip_endpoints():
+    statep = torch.tensor([1.0, 1.0], dtype=torch.complex64) / math.sqrt(2)
+    z1 = PhaseFlip(p=1.0, qubit=0).build(num_qubits=1)
+    out = z1(statep)
+    assert torch.allclose(out, torch.tensor([1.0, -1.0], dtype=torch.complex64) / math.sqrt(2), atol=1e-6)
+    z0 = PhaseFlip(p=0.0, qubit=0).build(num_qubits=1)
+    assert torch.allclose(z0(statep), statep, atol=1e-6)
+
+
+
+def test_phaseflip_half_randomizes_phase_in_density_matrix():
+    plus = torch.tensor([1.0, 1.0], dtype=torch.complex64) / math.sqrt(2)
+    rho = density_matrix(plus)
+    channel = PhaseFlip(p=0.5, qubit=0).build(num_qubits=1)
+    out = channel(rho)
+    expected_diag = torch.full((2,), 0.5, dtype=torch.float32)
+    assert torch.allclose(torch.diag(out).real, expected_diag, atol=1e-6)
+    assert torch.allclose(out[0, 1], torch.tensor(0.0, dtype=torch.complex64), atol=1e-6)
+    assert torch.allclose(out[1, 0], torch.tensor(0.0, dtype=torch.complex64), atol=1e-6)
+
+def test_phaseflip_to_matrix_matches_linear_mix():
+    p = 0.37
+    channel = PhaseFlip(p=p, qubit=0).build(num_qubits=1)
+    mat = channel.to_matrix(dtype=torch.cfloat)
+    i = torch.eye(2, dtype=torch.cfloat)
+    z = torch.tensor([[1, 0], [0, -1]], dtype=torch.cfloat)
+    expected = (1 - p) * i + p * z
+    assert torch.allclose(mat, expected)
+
+
+
+def test_depolarizing_identity():
+    psi = rand_state(1)
+    dep0 = Depolarizing(p=0.0, qubit=0).build(num_qubits=1)
+    assert torch.allclose(dep0(psi), psi, atol=1e-6)
+
+
+def test_depolarizing_randomizes_measurement_probabilities():
+    zero = torch.tensor([1.0, 0.0], dtype=torch.complex64)
+    full = Depolarizing(p=1.0, qubit=0).build(num_qubits=1)
+    out_full = full(zero)
+    probs_full = torch.abs(out_full) ** 2
+    assert torch.isclose(probs_full.sum(), torch.tensor(1.0), atol=1e-6)
+    assert torch.allclose(probs_full, torch.tensor([0.5, 0.5]), atol=0.2)
+    rho_full = full(density_matrix(zero))
+    expected_full_diag = torch.tensor([1.0 / 3.0, 2.0 / 3.0], dtype=torch.float32)
+    assert torch.allclose(torch.diag(rho_full).real, expected_full_diag, atol=1e-5)
+
+    mid = Depolarizing(p=0.4, qubit=0).build(num_qubits=1)
+    out_mid = mid(zero)
+    probs_mid = torch.abs(out_mid) ** 2
+    assert torch.isclose(probs_mid.sum(), torch.tensor(1.0), atol=1e-6)
+    assert probs_mid[0] > probs_full[0]
+    assert probs_mid[1] < probs_full[1]
+    rho_mid = mid(density_matrix(zero))
+    expected_mid_diag = torch.tensor([1 - 2 * 0.4 / 3, 2 * 0.4 / 3], dtype=torch.float32)
+    assert torch.allclose(torch.diag(rho_mid).real, expected_mid_diag, atol=1e-5)
+def test_depolarizing_to_matrix_matches_linear_mix():
+    p = 0.42
+    channel = Depolarizing(p=p, qubit=0).build(num_qubits=1)
+    mat = channel.to_matrix(dtype=torch.cfloat)
+    i = torch.eye(2, dtype=torch.cfloat)
+    x = torch.tensor([[0, 1], [1, 0]], dtype=torch.cfloat)
+    y = torch.tensor([[0, -1j], [1j, 0]], dtype=torch.cfloat)
+    z = torch.tensor([[1, 0], [0, -1]], dtype=torch.cfloat)
+    expected = (1 - p) * i + (p / 3) * (x + y + z)
+    assert torch.allclose(mat, expected)
+
+
+def test_amplitude_damping_extremes():
+    state1 = torch.tensor([0.0, 1.0], dtype=torch.complex64)
+    ad1 = AmplitudeDamping(gamma=1.0, qubit=0).build(num_qubits=1)
+    out = ad1(state1)
+    assert torch.allclose(out, torch.tensor([1.0, 0.0], dtype=torch.complex64), atol=1e-6)
+
+
+def test_phase_damping_noop_on_basis():
+    meas = MeasureProbabilityBuilt(num_qubits=1)
+    pd = Dephasing(gamma=0.77, qubit=0).build(num_qubits=1)
+    for basis in ([1.0, 0.0], [0.0, 1.0]):
+        psi = torch.tensor(basis, dtype=torch.complex64)
+        assert torch.allclose(meas(pd(psi)), meas(psi), atol=1e-6)
+
+
+def test_corr_depol_identity_statevector():
+    psi = rand_state(2)
+    cdep0 = CorrelatedDepolarizing(p=0.0, qubits=(0, 1)).build(num_qubits=2)
+    assert torch.allclose(cdep0(psi), psi, atol=1e-6)
 

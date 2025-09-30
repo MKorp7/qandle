@@ -1,20 +1,51 @@
 import pennylane as qml
 import torch
 import qandle
+import qandle.operators as op
+
+
+def _torch_device(num_qubits: int):
+    """Return a PennyLane device with Torch support if available.
+
+    PennyLane 0.39 removed the ``default.qubit.torch`` device in favour of
+    importing the ``lightning.qubit`` plugin with the Torch interface.  Older
+    versions (and our CI environment) might not have that plugin installed
+    either, so we progressively fall back to the plain ``default.qubit``
+    simulator which still supports the Torch interface.  Newer PennyLane
+    versions raise :class:`qml.DeviceError`, while older ones raised
+    ``pennylane.exceptions.DeviceError``.  To keep the test suite independent of
+    the exact PennyLane release we simply try a list of candidate device names
+    and return the first one that is available.
+    """
+
+    device_candidates = ["default.qubit.torch", "lightning.qubit", "default.qubit"]
+    last_error = None
+
+    for dev_name in device_candidates:
+        try:
+            return qml.device(dev_name, wires=num_qubits)
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = exc
+
+    if last_error is not None:  # pragma: no cover - should not happen
+        raise last_error
+
+    raise RuntimeError("No PennyLane device available")
+
 
 
 def test_sel():
     """Test StronglyEntanglingLayers"""
     num_qubits = 4
     depth = 10
-    pl_dev = qml.device("default.qubit.torch", wires=num_qubits)
+    pl_dev = _torch_device(num_qubits)
     inp = torch.rand(2**num_qubits, dtype=torch.cfloat)
     inp = inp / inp.norm()
     weights = torch.rand(depth, num_qubits, 3)
 
     @qml.qnode(device=pl_dev, interface="torch")
     def pl_circuit():
-        qml.QubitStateVector(inp, wires=range(num_qubits))
+        qml.StatePrep(inp, wires=range(num_qubits))
         qml.StronglyEntanglingLayers(weights=weights, wires=range(num_qubits))
         return qml.state()
 
@@ -29,7 +60,7 @@ def test_sel():
 def test_sel_to_matrix():
     num_qubits = 5
     depth = 11
-    pl_dev = qml.device("default.qubit.torch", wires=num_qubits)
+    pl_dev = _torch_device(num_qubits)
     weights = torch.rand(depth, num_qubits, 3)
 
     @qml.qnode(device=pl_dev, interface="torch")
@@ -64,14 +95,14 @@ def test_sel_batched():
     num_qubits = 5
     depth = 7
     batch = 17
-    pl_dev = qml.device("default.qubit.torch", wires=num_qubits)
+    pl_dev = _torch_device(num_qubits)
     inp = torch.rand(batch, 2**num_qubits, dtype=torch.cfloat)
     inp = inp / torch.linalg.norm(inp, dim=1, keepdim=True)
     weights = torch.rand(depth, num_qubits, 3)
 
     @qml.qnode(device=pl_dev, interface="torch")
     def pl_circuit():
-        qml.QubitStateVector(inp, wires=range(num_qubits))
+        qml.StatePrep(inp, wires=range(num_qubits))
         qml.StronglyEntanglingLayers(weights=weights, wires=range(num_qubits))
         return qml.state()
 
@@ -109,6 +140,34 @@ def test_sel_budget():
     sel(inp)
 
 
+def test_sel_to_qasm_sequence():
+    qubits = [0, 1]
+    depth = 1
+    q_params = torch.tensor(
+        [[[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]], dtype=torch.float
+    )
+    sel = qandle.StronglyEntanglingLayer(
+        qubits=qubits,
+        depth=depth,
+        q_params=q_params,
+        remapping=None,
+        num_qubits_total=len(qubits),
+    )
+
+    expected = [
+        qasm.QasmRepresentation("rz", 0.1, 0),
+        qasm.QasmRepresentation("ry", 0.2, 0),
+        qasm.QasmRepresentation("rz", 0.3, 0),
+        qasm.QasmRepresentation("rz", 0.4, 1),
+        qasm.QasmRepresentation("ry", 0.5, 1),
+        qasm.QasmRepresentation("rz", 0.6, 1),
+        qasm.QasmRepresentation("cx q[0], q[1]"),
+        qasm.QasmRepresentation("cx q[1], q[0]"),
+    ]
+
+    assert sel.to_qasm() == expected
+
+
 def test_sel_general():
     num_qubits = 5
     qandle_sel_ub = qandle.StronglyEntanglingLayer(qubits=list(range(num_qubits)), depth=10)
@@ -117,6 +176,15 @@ def test_sel_general():
     assert isinstance(qandle_sel(inp), torch.Tensor)
     assert isinstance(qandle_sel.decompose(), list)
     assert isinstance(qandle_sel.__str__(), str)
+
+
+def test_sel_unbuilt_decompose_without_total_qubits():
+    sel = qandle.StronglyEntanglingLayer(qubits=[0, 2, 4], depth=3)
+    layers = sel.decompose()
+
+    assert layers, "Decomposition should return at least one operator"
+    assert all(isinstance(layer, op.UnbuiltOperator) for layer in layers)
+    assert any(isinstance(layer, op.CNOT) for layer in layers), "Expected unbuilt CNOT gates"
 
 
 def test_twolocal():

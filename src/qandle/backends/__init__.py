@@ -1,10 +1,10 @@
 import torch
-from typing import Protocol, runtime_checkable, Sequence
+from typing import Protocol, Sequence, runtime_checkable
 
 
 @runtime_checkable
 class QuantumBackend(Protocol):
-    '''Backend interface.'''
+    """Backend interface."""
 
     def allocate(self, n_qubits: int): ...
 
@@ -19,7 +19,15 @@ __all__ = [
     "QuantumBackend",
     "StateVectorBackend",
     "MPSBackend",
+    "DensityMatrixBackend",
+    "StabilizerBackend",
+    "OOCStateVectorSimulator",
+    "PauliTransferMatrixBackend",
 ]
 
 from .statevector import StateVectorBackend
 from .mps import MPSBackend
+from .density_matrix import DensityMatrixBackend
+from .stabilizer import StabilizerBackend
+from .ooc import OOCStateVectorSimulator
+from qandle.noise.ptm import PauliTransferMatrixBackend

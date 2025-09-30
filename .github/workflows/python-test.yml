@@ -9,27 +9,53 @@ on:
         - main
 
 jobs:
-    build:
-        runs-on: ubuntu-latest
-        strategy:
-            matrix:
-                python-version: ["3.10", ]
-        steps:
-        - uses: actions/checkout@v4
-        - name: Install poetry and poe
-          run: |
-            pipx install poetry poethepoet
-        - name: Set up Python ${{ matrix.python-version }}
-          uses: actions/setup-python@v5
-          with:
-            python-version: ${{ matrix.python-version }}
-            cache: 'poetry'
-        - name: Install dependencies
-          run: |
-            poetry install --with dev
-        - name: Check formatting
-          run: |
-            poe format
-        - name: Run tests
-          run: |
-            poe test
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install poetry and poe
+        run: |
+          pipx install poetry poethepoet
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'poetry'
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
+      - name: Check formatting
+        run: |
+          poe format
+      - name: Run tests
+        run: |
+          poe test
+      - name: Benchmark smoke test
+        run: |
+          poetry run python scripts/benchmarks/run.py --preset smoke --no-plots --output-dir scripts/benchmarks/results-ci
+
+  splitter-acceptance:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        max-qubits: [4, 6, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install poetry and poe
+        run: |
+          pipx install poetry poethepoet
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: 'poetry'
+      - name: Install dependencies
+        run: |
+          poetry install --with dev
+      - name: Run splitter acceptance tests (max_qubits=${{ matrix.max-qubits }})
+        run: |
+          poetry run pytest tests/test_splitter_acceptance.py --max-qubits=${{ matrix.max-qubits }}

@@ -1,9 +1,11 @@
 import typing
 import torch
 import qandle.ansaetze.ansatz as ansatz
+import qandle.config as config
 import qandle.operators as op
 import qandle.utils as utils
 import qandle.qasm as qasm
+from qandle.kernels import apply_CNOT
 
 __all__ = ["SpecialUnitary"]
 
@@ -77,11 +79,16 @@ class SpecialUnitaryBuilt(ansatz.BuiltAnsatz):
                 for r in rotations:
                     block.append(r(w))
             layers.append(block)
-        self.register_buffer(
-            "cnots",
-            self._get_cnot_matrix(qubits=self.qubits, num_qubits=num_qubits).contiguous(),
-            persistent=False,
+        self._use_dense = config.USE_DENSE_CONTROL_GATES
+        self._cnot_pairs = [
+            (self.qubits[c], self.qubits[c + 1]) for c in range(len(self.qubits) - 1)
+        ]
+        dense = (
+            self._get_cnot_matrix(qubits=self.qubits, num_qubits=num_qubits).contiguous()
+            if self._use_dense and self._cnot_pairs
+            else torch.empty(0, dtype=torch.cfloat)
         )
+        self.register_buffer("cnots", dense, persistent=False)
         self.layers = torch.nn.ModuleList(
             [
                 torch.nn.Sequential(*[la.build(num_qubits=num_qubits) for la in lay])
@@ -103,7 +110,12 @@ class SpecialUnitaryBuilt(ansatz.BuiltAnsatz):
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         state = self.layers[0](state)
         for layer in self.layers[1:]:
-            state = torch.matmul(self.cnots, state)
+            if self._cnot_pairs:
+                if self._use_dense:
+                    state = torch.matmul(self.cnots, state)
+                else:
+                    for control, target in self._cnot_pairs:
+                        state = apply_CNOT(state, control, target, self.num_qubits)
             state = layer(state)
         return state
 

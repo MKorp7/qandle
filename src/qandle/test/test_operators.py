@@ -58,7 +58,7 @@ def test_reset_batched():
 
 def forward_ground_truth(num_w: int, pl_op, inp):
     def pl_circuit():
-        qml.QubitStateVector(inp, wires=range(num_w))
+        qml.StatePrep(inp, wires=range(num_w))
         for w in range(num_w):
             qml.RX(phi=0, wires=w)
         pl_op()
